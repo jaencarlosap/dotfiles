@@ -1,24 +1,16 @@
-# Dotfiles
-
-Repository to unify the commands that I use most daily
-
-
-<details>
-<summary>Neovim Config</summary>
-
 # 💤 LazyVim configuration
 
 This repository has the configuration from [LazyVim](https://github.com/LazyVim/LazyVim).
 
 ## To start using this configuration follow these steps:
 
-To install the current confing you can run 
+1. Clone the current repository
 
 ```bash
-make install_nvim
+git clone git@github.com:jaencarlosap/neovim-configuration.git  ~/.config/nvim
 ```
 
-Install dependencies
+3. Install dependencies
 
 ```bash
   brew install neovim
@@ -35,13 +27,3 @@ Install dependencies
 > If it generate some error related to load the lazy plugins try remove the local shares `rm -rf ~/.local/share/nvim/`
 
 
-</details>
-
-<details>
-<summary>Clean Macos System</summary>
-
-To clean your system files and cache, you can run
-```bash
-make clean_system
-```
-</details>
