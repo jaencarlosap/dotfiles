@@ -1,4 +1,5 @@
-.PHONY: install_nvim clean_system clean_system_dry dtool install_dtool
+.PHONY: install_nvim clean_system clean_system_dry dtool install_dtool \
+	install_opencode uninstall_opencode opencode_status
 
 # The shell scripts live in older_scripts/ as a fallback during the migration
 # to dtool. They will be removed once dtool is verified.
@@ -19,4 +20,14 @@ install_dtool: dtool
 	mkdir -p $(HOME)/.local/bin
 	cp dtool/dtool $(HOME)/.local/bin/dtool
 	@echo "Installed to $(HOME)/.local/bin/dtool — make sure that dir is on your PATH."
+
+# opencode config: symlinks ~/.config/opencode -> opencode-config/ (LM Studio on pcgamer)
+install_opencode:
+	@$(MAKE) -C opencode-config install
+
+uninstall_opencode:
+	@$(MAKE) -C opencode-config uninstall
+
+opencode_status:
+	@$(MAKE) -C opencode-config status
 

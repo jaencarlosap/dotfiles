@@ -1,0 +1,119 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // ─────────────────────────────────────────────────────────────
+  // Modelo principal: Qwen3.5 9B es el mejor balance calidad/velocidad
+  // para 12GB de VRAM. (Ver README para los settings de carga en LM Studio.)
+  // ─────────────────────────────────────────────────────────────
+  "model": "lmstudio/qwen/qwen3.5-9b",
+
+  // Modelo "pequeño": lo usa opencode para tareas triviales (titulos de
+  // sesion, resumenes de compactacion). phi-4-mini es minusculo y rapido,
+  // asi NO gastamos el modelo grande en cosas tontas.
+  "small_model": "lmstudio/phi-4-mini-instruct",
+
+  // Agente primario por defecto al iniciar (Tab para cambiar). Debe ser primary.
+  "default_agent": "auto",
+
+  "permission": {
+    // Sin esto, edit/bash usan "ask" por defecto -> se detiene en CADA paso.
+    "edit": "allow",
+    "webfetch": "allow",
+    "bash": {
+      // Permite todo por defecto, pero pide confirmacion en lo destructivo.
+      "*": "allow",
+      "rm -rf *": "ask",
+      "git push *": "ask",
+      "git reset --hard *": "ask",
+      "sudo *": "ask"
+    },
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    }
+  },
+
+  "provider": {
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LM Studio (pcgamer / tailscale)",
+      "options": {
+        "baseURL": "http://pcgamer:1234/v1"
+      },
+      "models": {
+        // ── Coding rapido / agente principal ─────────────────────
+        // Cargar en LM Studio a Q4_K_M o Q5_K_M, ctx 24-32k, Flash Attn ON.
+        "qwen/qwen3.5-9b": {
+          "name": "Qwen3.5 9B (coding, principal)",
+          "tools": true,
+          "reasoning": true,
+          "limit": { "context": 32768, "output": 8192 }
+        },
+
+        // ── Agentico fuerte (tool-calling nativo). Pesa mas: MXFP4 ~11GB,
+        // usar contexto corto (<=12k) para no desbordar 12GB. ──────
+        "openai/gpt-oss-20b": {
+          "name": "GPT-OSS 20B (agentico)",
+          "tools": true,
+          "reasoning": true,
+          "limit": { "context": 12288, "output": 8192 }
+        },
+
+        // ── Razonamiento profundo / analisis de proyecto ─────────
+        // Q4_K_M ~8.5GB. Modelo "thinking": lento pero bueno analizando.
+        "deepseek-r1-distill-qwen-14b": {
+          "name": "DeepSeek-R1 14B (razonamiento/analisis)",
+          "tools": true,
+          "reasoning": true,
+          "limit": { "context": 16384, "output": 8192 }
+        },
+
+        // ── Especializado en codigo (pero Q3_K_M baja calidad; opcional) ──
+        "mistralai/codestral-22b-v0.1": {
+          "name": "Codestral 22B (codigo, Q3)",
+          "tools": true,
+          "reasoning": false,
+          "limit": { "context": 16384, "output": 8192 }
+        },
+
+        // ── Vision (screenshots, diagramas, UI) ──────────────────
+        "zai-org/glm-4.6v-flash": {
+          "name": "GLM-4.6v Flash (vision)",
+          "tools": true,
+          "reasoning": true,
+          "limit": { "context": 32768, "output": 8192 }
+        },
+
+        // ── Rapidos / small tasks ────────────────────────────────
+        "phi-4-mini-instruct": {
+          "name": "Phi-4 Mini (rapido/small)",
+          "tools": true,
+          "reasoning": false,
+          "limit": { "context": 16384, "output": 4096 }
+        },
+        "mistralai/mistral-7b-instruct-v0.3": {
+          "name": "Mistral 7B (general rapido)",
+          "tools": true,
+          "reasoning": false,
+          "limit": { "context": 16384, "output": 4096 }
+        }
+      }
+    }
+  },
+
+  "mcp": {
+    "duckduckgo": {
+      "type": "local",
+      "enable": true,
+      "command": [
+        "docker",
+        "run",
+        "-i",
+        "--rm",
+        "ashdev/duckduckgo-mcp-server"
+      ]
+    }
+  }
+}

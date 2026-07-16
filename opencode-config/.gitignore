@@ -1,0 +1,11 @@
+# Respaldos locales generados por el Makefile
+.backups/
+
+# Dependencias del plugin de opencode (viven en ~/.config/opencode, no aqui)
+node_modules/
+package.json
+package-lock.json
+bun.lock
+
+# OS
+.DS_Store

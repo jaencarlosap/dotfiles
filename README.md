@@ -45,3 +45,20 @@ To clean your system files and cache, you can run
 make clean_system
 ```
 </details>
+
+<details>
+<summary>opencode Config (local models on pcgamer)</summary>
+
+Versioned [opencode](https://opencode.ai) config pointing to a local LM Studio
+server (`pcgamer`, via Tailscale, 12GB VRAM). Lives in `opencode-config/`, which
+is the source of truth; installing symlinks `~/.config/opencode` to it.
+
+```bash
+make install_opencode     # symlink ~/.config/opencode -> opencode-config/ (backs up first)
+make opencode_status      # show symlink state
+make uninstall_opencode   # remove the symlinks
+```
+
+More detail (per-model routing, and the LM Studio load settings that fix the
+slowness) in [`opencode-config/README.md`](opencode-config/README.md).
+</details>
