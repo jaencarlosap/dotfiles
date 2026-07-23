@@ -12,7 +12,7 @@ BACKUP_DIR   := $(REPO_DIR)/.backups
 STAMP        := $(shell date +%Y%m%d-%H%M%S)
 
 # Archivos/carpetas que gestionamos (relativos a TARGET_DIR)
-LINKS        := opencode.jsonc agent
+LINKS        := opencode.jsonc agent rules
 
 # Endpoint del PC con los modelos (LM Studio via Tailscale)
 LMSTUDIO_URL := http://pcgamer:1234/v1
@@ -98,6 +98,27 @@ status:
 test-conn:
 	@echo "Probando $(LMSTUDIO_URL) ..."
 	@curl -s -m 5 "$(LMSTUDIO_URL)/models" >/dev/null && echo "✅ LM Studio responde" || echo "❌ Sin respuesta (revisa Tailscale / LM Studio server)"
+
+## ctx: Contexto REAL cargado en LM Studio vs. el declarado en opencode.jsonc
+.PHONY: ctx
+ctx:
+	@curl -s -m 5 "$(LMSTUDIO_URL)/../api/v0/models" | python3 -c "\
+import sys,json,re;\
+d=[m for m in json.load(sys.stdin)['data'] if m.get('state')=='loaded'];\
+[print(f\"  LM Studio: {m['id']}  n_ctx={m.get('loaded_context_length')}  {m.get('quantization')}\") for m in d] or print('  (ningun modelo cargado)')" 2>/dev/null || echo "  ❌ sin respuesta"
+	@python3 -c "\
+import re,json;\
+s=open('$(REPO_DIR)/opencode.jsonc').read();\
+s=re.sub(r'^\s*//.*$$','',s,flags=re.M);\
+c=json.loads(s)['provider']['lmstudio']['models'];\
+[print(f\"  opencode : {k}  context={v['limit']['context']}  output={v['limit']['output']}  -> compacta a los {v['limit']['context']-v['limit']['output']} tokens\") for k,v in c.items()]"
+
+## bench: Mide tokens/seg contra el modelo cargado
+.PHONY: bench
+bench:
+	@curl -s -m 180 "$(LMSTUDIO_URL)/../api/v0/chat/completions" -H 'Content-Type: application/json' \
+		-d '{"messages":[{"role":"user","content":"Count from 1 to 60, one number per line."}],"max_tokens":200,"temperature":0.1}' \
+		| python3 -c "import sys,json;s=json.load(sys.stdin).get('stats',{});print(f\"  {s.get('tokens_per_second',0):.1f} tok/s  (TTFT {s.get('time_to_first_token',0):.2f}s)\")" 2>/dev/null || echo "  ❌ sin respuesta"
 
 ## models: Lista los modelos disponibles en pcgamer
 .PHONY: models

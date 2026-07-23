@@ -1,24 +1,85 @@
 {
   "$schema": "https://opencode.ai/config.json",
-
   // ─────────────────────────────────────────────────────────────
   // Modelo principal: Qwen3.5 9B es el mejor balance calidad/velocidad
   // para 12GB de VRAM. (Ver README para los settings de carga en LM Studio.)
   // ─────────────────────────────────────────────────────────────
   "model": "lmstudio/qwen/qwen3.5-9b",
-
   // Modelo "pequeño": lo usa opencode para tareas triviales (titulos de
-  // sesion, resumenes de compactacion). phi-4-mini es minusculo y rapido,
-  // asi NO gastamos el modelo grande en cosas tontas.
-  "small_model": "lmstudio/phi-4-mini-instruct",
-
+  // sesion, resumenes de compactacion).
+  // OJO: si apuntas a un modelo que NO esta cargado en LM Studio, el server
+  // NO da 404 — cae silenciosamente al modelo cargado. Asi que aqui solo va
+  // algo que realmente este disponible. Si vuelves a cargar phi-4-mini en
+  // pcgamer, cambia esto a "lmstudio/phi-4-mini-instruct" y declaralo abajo.
+  "small_model": "lmstudio/qwen/qwen3.5-9b",
   // Agente primario por defecto al iniciar (Tab para cambiar). Debe ser primary.
   "default_agent": "auto",
-
+  // ─────────────────────────────────────────────────────────────
+  // ANTI-SLOP: reglas que se inyectan en el prompt de TODOS los agentes
+  // (auto, analyze, build, plan...). Van aqui y no dentro de agent/*.md
+  // precisamente para no duplicar la misma logica en varios sitios.
+  // OJO: las rutas relativas se resuelven contra el DIRECTORIO DEL PROYECTO,
+  // no contra este archivo. Con "rules/*.md" no cargaba nada (verificado).
+  // Por eso va ruta absoluta via {env:HOME}.
+  // Verifica con:
+  //   opencode run "sin usar herramientas: tienes una seccion 'No dummy, no placeholder, no fake'?"
+  // ─────────────────────────────────────────────────────────────
+  "instructions": [
+    "{env:HOME}/.config/opencode/rules/engineering-discipline.md"
+  ],
+  // ─────────────────────────────────────────────────────────────
+  // ANTI-DERIVA: el modelo "pierde el hilo" y acaba haciendo algo que no
+  // tiene que ver con el objetivo inicial. Eso NO es que el modelo sea
+  // tonto: es la compactacion. Al llenarse el contexto, el resumen se come
+  // el objetivo original (una linea al principio de una conversacion larga)
+  // y deja sobre todo la actividad mecanica reciente -> el modelo sigue la
+  // ACTIVIDAD en vez del OBJETIVO.
+  // ─────────────────────────────────────────────────────────────
+  "compaction": {
+    "auto": true,
+    // Tira los outputs viejos de herramientas (lecturas de ficheros, salidas
+    // de bash). Son la MAYOR parte del contexto en un loop agentico, y casi
+    // nunca hacen falta enteros mas tarde. Con esto la compactacion salta
+    // mucho menos -> el objetivo sobrevive mas tiempo. Es la mayor mejora.
+    "prune": true,
+    // OJO: "reserved" NO se aplica aqui. Verificado en el binario (v1.18.4):
+    //
+    //   usable = limit.input ? (limit.input - reserved)
+    //                        : (limit.context - min(limit.output, 32000))
+    //
+    // Solo se usa la rama con "reserved" si declaras limit.input en el modelo.
+    // Como no lo declaramos, el umbral es context - output y "reserved" se
+    // ignoraba en silencio. Por eso esta fuera: para no dar falsa sensacion
+    // de control. El colchon real ya es "output" entero (16384).
+    //
+    // Turnos recientes que se mantienen VERBATIM (sin resumir).
+    "tail_turns": 3
+  },
+  // ─────────────────────────────────────────────────────────────
+  // Trunca outputs gigantes de herramientas (un `grep -r` o un `cat` largo
+  // pueden meter 15k tokens de golpe y disparar la compactacion). Lo que
+  // pasa del limite se guarda en disco y al modelo le llega un preview.
+  // Defaults de opencode: 2000 lineas / 51200 bytes — demasiado para un 9B.
+  // ─────────────────────────────────────────────────────────────
+  "tool_output": {
+    "max_lines": 400,
+    "max_bytes": 16000
+  },
+  "agent": {
+    // El agente interno que hace el resumen. Por defecto comprime "todo por
+    // igual" y ahi es donde se pierde el objetivo. Este prompt le obliga a
+    // conservar el objetivo original PALABRA POR PALABRA.
+    "compaction": {
+      "prompt": "You are compacting a coding agent's context. Produce a summary with these sections, in this order:\n\n## ORIGINAL GOAL (VERBATIM)\nCopy the user's original request word for word. Do NOT paraphrase, shorten, reinterpret or 'clean up' this text. If a previous summary already contains an ORIGINAL GOAL section, copy that one forward unchanged. This section is the single most important part of the summary.\n\n## FILES ALREADY CREATED OR MODIFIED\nAn exact list of every file path the agent has created or edited so far, one per line, each with a 5-word note on what it contains. Carry forward every path from any previous summary — NEVER drop a path. This list exists so the agent does not recreate from scratch a file it already wrote. If unsure whether a file was written, list it and mark it '(verify with git status)'.\n\n## DONE\nWhat has actually been completed and verified. Facts only, no plans.\n\n## NOT DONE YET\nWhat remains before the ORIGINAL GOAL is satisfied. Be explicit.\n\n## KEY FACTS\nExact file paths, function names, ports, commands that worked, errors seen. Keep identifiers exact.\n\n## NEXT STEP\nThe single next action that moves toward the ORIGINAL GOAL.\n\nRules: never invent progress that did not happen; if something failed, say it failed. Prefer dropping narrative detail over dropping the goal or the file list. End the summary with this line verbatim: 'Before writing any file, re-read .agent_progress.md and run git status --short. Continue from existing files; do not restart.'"
+    }
+  },
   "permission": {
     // Sin esto, edit/bash usan "ask" por defecto -> se detiene en CADA paso.
+    "todowrite": "allow",
     "edit": "allow",
     "webfetch": "allow",
+    "websearch": "allow",
+    "question": "allow",
     "bash": {
       // Permite todo por defecto, pero pide confirmacion en lo destructivo.
       "*": "allow",
@@ -34,7 +95,6 @@
       "*.env.example": "allow"
     }
   },
-
   "provider": {
     "lmstudio": {
       "npm": "@ai-sdk/openai-compatible",
@@ -43,66 +103,55 @@
         "baseURL": "http://pcgamer:1234/v1"
       },
       "models": {
-        // ── Coding rapido / agente principal ─────────────────────
-        // Cargar en LM Studio a Q4_K_M o Q5_K_M, ctx 24-32k, Flash Attn ON.
+        // ─────────────────────────────────────────────────────────
+        // IMPORTANTE — de donde salen estos dos numeros:
+        //
+        // opencode compacta cuando los tokens llegan a:
+        //     umbral = context - output
+        // (NO a "context"; el output se reserva entero). Por eso lo que
+        // manda para "cuanto puedo hablar antes de que compacte" es la
+        // RESTA, y subir solo `context` sin mirar `output` engaña.
+        //
+        // 1) LM Studio tiene cargado n_ctx = 70144 (verifica con
+        //    `make ctx`). El prompt Y lo generado tienen que caber ahi:
+        //    context + margen <= 70144. Con 62000 quedan ~8k de colchon
+        //    para el desfase entre el contador de opencode y el del server.
+        //
+        // 2) El bloque de "thinking" de qwen3.5 CRECE con el tamaño del
+        //    prompt. Medido: con prompt de 44k tokens gasto los 8192 tokens
+        //    de output ENTEROS dentro de reasoning_content y devolvio
+        //    content vacio (finish_reason=length) → "no responde nada".
+        //    Por eso output NO baja de 16384 aunque "regale" umbral.
+        //
+        // => umbral real = 62000 - 16384 = 45616 tokens de conversacion
+        //    (antes: 48000 - 16384 = 31616 → +44% de contexto util).
+        // ─────────────────────────────────────────────────────────
         "qwen/qwen3.5-9b": {
-          "name": "Qwen3.5 9B (coding, principal)",
+          "name": "Qwen3.5 9B",
           "tools": true,
           "reasoning": true,
-          "limit": { "context": 32768, "output": 8192 }
+          "limit": {
+            "context": 62000,
+            "output": 16384
+          }
         },
-
-        // ── Agentico fuerte (tool-calling nativo). Pesa mas: MXFP4 ~11GB,
-        // usar contexto corto (<=12k) para no desbordar 12GB. ──────
-        "openai/gpt-oss-20b": {
-          "name": "GPT-OSS 20B (agentico)",
+        // No cargado ahora mismo. NO poner 262144: el KV cache de 256k no
+        // entra en 12GB y provoca el mismo fallo de respuesta vacia.
+        "google/gemma-4-12b-qat": {
+          "name": "Gemma 4 12B QAT",
           "tools": true,
           "reasoning": true,
-          "limit": { "context": 12288, "output": 8192 }
-        },
-
-        // ── Razonamiento profundo / analisis de proyecto ─────────
-        // Q4_K_M ~8.5GB. Modelo "thinking": lento pero bueno analizando.
-        "deepseek-r1-distill-qwen-14b": {
-          "name": "DeepSeek-R1 14B (razonamiento/analisis)",
-          "tools": true,
-          "reasoning": true,
-          "limit": { "context": 16384, "output": 8192 }
-        },
-
-        // ── Especializado en codigo (pero Q3_K_M baja calidad; opcional) ──
-        "mistralai/codestral-22b-v0.1": {
-          "name": "Codestral 22B (codigo, Q3)",
-          "tools": true,
-          "reasoning": false,
-          "limit": { "context": 16384, "output": 8192 }
-        },
-
-        // ── Vision (screenshots, diagramas, UI) ──────────────────
-        "zai-org/glm-4.6v-flash": {
-          "name": "GLM-4.6v Flash (vision)",
-          "tools": true,
-          "reasoning": true,
-          "limit": { "context": 32768, "output": 8192 }
-        },
-
-        // ── Rapidos / small tasks ────────────────────────────────
-        "phi-4-mini-instruct": {
-          "name": "Phi-4 Mini (rapido/small)",
-          "tools": true,
-          "reasoning": false,
-          "limit": { "context": 16384, "output": 4096 }
-        },
-        "mistralai/mistral-7b-instruct-v0.3": {
-          "name": "Mistral 7B (general rapido)",
-          "tools": true,
-          "reasoning": false,
-          "limit": { "context": 16384, "output": 4096 }
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
         }
       }
     }
   },
-
+  "plugin": [
+    "@warp-dot-dev/opencode-warp@0.1.5"
+  ],
   "mcp": {
     "duckduckgo": {
       "type": "local",
