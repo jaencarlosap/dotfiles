@@ -66,12 +66,40 @@
     "max_bytes": 16000
   },
   "agent": {
+    // THINKING OFF solo para el ejecutor. `reasoningEffort` va como clave de
+    // NIVEL SUPERIOR del agente (camelCase), NO anidada en `options` ni en
+    // snake_case — asi lo documenta opencode y asi el AI SDK lo mapea a
+    // `reasoning_effort` en el body. LM Studio honra "none" -> 0 tokens de
+    // razonamiento. El agente `analyze` NO lleva esto y conserva el thinking.
+    "auto": {
+      "reasoningEffort": "none"
+    },
     // El agente interno que hace el resumen. Por defecto comprime "todo por
     // igual" y ahi es donde se pierde el objetivo. Este prompt le obliga a
     // conservar el objetivo original PALABRA POR PALABRA.
     "compaction": {
       "prompt": "You are compacting a coding agent's context. Produce a summary with these sections, in this order:\n\n## ORIGINAL GOAL (VERBATIM)\nCopy the user's original request word for word. Do NOT paraphrase, shorten, reinterpret or 'clean up' this text. If a previous summary already contains an ORIGINAL GOAL section, copy that one forward unchanged. This section is the single most important part of the summary.\n\n## FILES ALREADY CREATED OR MODIFIED\nAn exact list of every file path the agent has created or edited so far, one per line, each with a 5-word note on what it contains. Carry forward every path from any previous summary — NEVER drop a path. This list exists so the agent does not recreate from scratch a file it already wrote. If unsure whether a file was written, list it and mark it '(verify with git status)'.\n\n## DONE\nWhat has actually been completed and verified. Facts only, no plans.\n\n## NOT DONE YET\nWhat remains before the ORIGINAL GOAL is satisfied. Be explicit.\n\n## KEY FACTS\nExact file paths, function names, ports, commands that worked, errors seen. Keep identifiers exact.\n\n## NEXT STEP\nThe single next action that moves toward the ORIGINAL GOAL.\n\nRules: never invent progress that did not happen; if something failed, say it failed. Prefer dropping narrative detail over dropping the goal or the file list. End the summary with this line verbatim: 'Before writing any file, re-read .agent_progress.md and run git status --short. Continue from existing files; do not restart.'"
     }
+  },
+  // ─────────────────────────────────────────────────────────────
+  // FEEDBACK LOOPS — lo que hace a un agente "independiente" no es el
+  // modelo, es que el ENTORNO le diga cuando se equivoca sin que el tenga
+  // que razonarlo. Un modelo pequeño se beneficia el doble de esto.
+  // ─────────────────────────────────────────────────────────────
+  // LSP: tras cada edicion inyecta los errores REALES del compilador/tipos
+  // (gopls, pyright, typescript-language-server, rust-analyzer...). opencode
+  // los auto-instala en su propio bin la primera vez (necesita el toolchain
+  // del lenguaje + red esa primera vez). Sustituye "el modelo adivina si
+  // compila" por "la herramienta dice: linea 42, type error".
+  "lsp": true,
+  // Formatter: gofmt/prettier/ruff automatico al guardar. El modelo deja de
+  // gastar turnos en estilo y los diffs quedan limpios.
+  "formatter": true,
+  "experimental": {
+    // Si deniegas una herramienta (p.ej. un `git push` que cae en "ask" y
+    // dices que no), el agente SIGUE trabajando en vez de abortar la tarea
+    // entera. Mas parecido a como Claude Code encaja un "no" y busca otra via.
+    "continue_loop_on_deny": true
   },
   "permission": {
     // Sin esto, edit/bash usan "ask" por defecto -> se detiene en CADA paso.

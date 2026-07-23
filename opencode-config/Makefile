@@ -12,7 +12,7 @@ BACKUP_DIR   := $(REPO_DIR)/.backups
 STAMP        := $(shell date +%Y%m%d-%H%M%S)
 
 # Archivos/carpetas que gestionamos (relativos a TARGET_DIR)
-LINKS        := opencode.jsonc agent rules
+LINKS        := opencode.jsonc agent rules command plugin bin templates
 
 # Endpoint del PC con los modelos (LM Studio via Tailscale)
 LMSTUDIO_URL := http://pcgamer:1234/v1
@@ -98,6 +98,11 @@ status:
 test-conn:
 	@echo "Probando $(LMSTUDIO_URL) ..."
 	@curl -s -m 5 "$(LMSTUDIO_URL)/models" >/dev/null && echo "✅ LM Studio responde" || echo "❌ Sin respuesta (revisa Tailscale / LM Studio server)"
+
+## init-agents: Genera un AGENTS.md en el proyecto actual (DIR=. por defecto)
+.PHONY: init-agents
+init-agents:
+	@bash "$(REPO_DIR)/bin/init-agents.sh" "$(if $(DIR),$(DIR),$(CURDIR))"
 
 ## ctx: Contexto REAL cargado en LM Studio vs. el declarado en opencode.jsonc
 .PHONY: ctx

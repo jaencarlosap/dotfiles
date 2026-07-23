@@ -9,22 +9,29 @@ El repo es la **fuente de verdad**. `make install` reemplaza los archivos en
 ## Uso
 
 ```bash
-make install     # crea los symlinks (respalda lo previo)
-make status      # ver estado de los symlinks
-make test-conn   # ping a LM Studio en pcgamer
-make models      # lista modelos disponibles
-make uninstall   # quita los symlinks
-make restore     # restaura el ultimo respaldo
+make install       # crea los symlinks (respalda lo previo)
+make status        # ver estado de los symlinks
+make test-conn     # ping a LM Studio en pcgamer
+make models        # lista modelos disponibles
+make ctx           # contexto real del server vs. lo declarado + umbral
+make bench         # tokens/seg del modelo cargado
+make init-agents   # genera AGENTS.md en el proyecto actual (DIR=... o CWD)
+make uninstall     # quita los symlinks
+make restore       # restaura el ultimo respaldo
 ```
 
 ## Qué se versiona
 
-| Archivo             | Rol                                                        |
-| ------------------- | ---------------------------------------------------------- |
-| `opencode.jsonc`    | Config principal: provider LM Studio, modelos, permisos    |
-| `agent/auto.md`     | Agente primario de coding (Qwen3.5 9B)                     |
-| `agent/analyze.md`  | Agente de análisis/arquitectura (read-only)                |
-| `rules/*.md`        | Reglas anti-slop inyectadas en **todos** los agentes       |
+| Archivo / carpeta        | Rol                                                        |
+| ------------------------ | ---------------------------------------------------------- |
+| `opencode.jsonc`         | Config principal: provider, modelos, permisos, LSP/formatter |
+| `agent/auto.md`          | Agente primario de coding (Qwen3.5 9B)                     |
+| `agent/analyze.md`       | Agente de análisis/arquitectura (delegable con `task`)     |
+| `rules/*.md`             | Reglas anti-slop inyectadas en **todos** los agentes       |
+| `command/*.md`           | Comandos: `/verify`, `/fix`, `/pr`                         |
+| `plugin/verify-on-edit.ts` | Chequeo de compilación/lint tras cada edición            |
+| `templates/AGENTS.md`    | Plantilla de contexto por-proyecto (`make init-agents`)    |
+| `bin/init-agents.sh`     | Genera un `AGENTS.md` con los comandos ya detectados       |
 
 ## 🧹 Anti-slop: ficheros de más, duplicados y "empezar de cero"
 
@@ -57,6 +64,87 @@ Además del contexto, tres palancas que ya están aplicadas:
 Lo que **no** conviene tocar: bajar `output` para ganar umbral (el *thinking* de
 qwen se come la salida entera y devuelve respuesta vacía), ni cargar el modelo a
 262k en LM Studio (el KV cache se sale de los 12GB y se cae a CPU).
+
+## 🤖 Bucles de feedback: hacer al agente independiente
+
+Lo que hace autónomo a un agente no es el modelo grande, son los **bucles de
+feedback**: que el entorno le diga cuándo se equivoca sin que él lo razone. Un
+modelo pequeño gana el doble con esto. Cuatro piezas activas:
+
+### 1. LSP + formatter (`lsp: true`, `formatter: true`)
+
+Tras cada edición, opencode inyecta en el output de la herramienta `edit` los
+**diagnósticos reales** del fichero. Verificado en vivo — el output de una
+edición que rompía un `.go` contenía:
+
+```
+Edit applied successfully.
+LSP errors detected in this file, please fix:
+<diagnostics> ERROR [4:14] missing ',' before newline ... </diagnostics>
+```
+
+Detalle útil: opencode trae un analizador **interno** para Go, así que esto
+funciona **aunque `gopls` no esté instalado**. Para diagnósticos semánticos más
+profundos (TS/Python) sí baja el LSP externo la primera vez (necesita toolchain
++ red); si falta, no rompe nada, simplemente no hay esa capa.
+
+### 2. Plugin `verify-on-edit`
+
+Complementa al LSP: tras editar un `.go`/`.py`/`.sh` corre un chequeo **rápido**
+de parseo/compilación de ese fichero y, si falla, anexa un `❌ VERIFY-ON-EDIT`
+al output de la tool — imposible de ignorar, síncrono, en el mismo turno.
+Verificado: aparece junto al bloque LSP. Desactívalo con `OPENCODE_VERIFY_SKIP=1`.
+La verificación **pesada** (tests, build completo) NO va aquí — va en `/verify`,
+porque correr la suite tras cada edición sería demasiado lento.
+
+### 3. Comandos (`/verify`, `/fix`, `/pr`)
+
+Workflows en plantilla para que el modelo siga un guion en vez de improvisar:
+
+| Comando   | Qué hace |
+| --------- | -------- |
+| `/verify` | Detecta el tipo de proyecto, corre build + test, reporta ✅/❌ en una línea. |
+| `/fix`    | Reproduce el fallo → causa raíz → arreglo mínimo → **re-verifica** en bucle. Prohíbe silenciar el error. |
+| `/pr`     | Verifica en verde → rama → commit convencional → push → `gh pr create`. Nunca abre PR en rojo. |
+
+### 4. `AGENTS.md` por proyecto
+
+`make init-agents` (o `bin/init-agents.sh` desde el proyecto) genera un
+`AGENTS.md` con los comandos de build/test/lint **ya detectados** según el tipo
+de repo. opencode lo auto-carga como contexto, así el modelo actúa sin preguntar.
+
+### 5. `continue_loop_on_deny: true`
+
+Si deniegas una herramienta (p.ej. un `git push`), el agente sigue trabajando y
+busca otra vía en vez de abortar la tarea entera.
+
+### 6. Thinking híbrido (auto sin thinking, analyze con thinking)
+
+El bug de "respuesta vacía": con thinking ON, el bloque de razonamiento de
+qwen3.5 se come el presupuesto de `output` entero y devuelve `content` vacío
+(medido: un `17*23` gastó los 300 tokens de output en `reasoning` y no contestó).
+
+Solución por-agente: el **ejecutor** `auto` corre **sin** thinking (rápido, sin
+el bug), y el **analista** `analyze` lo conserva (donde el razonamiento paga).
+
+```jsonc
+// opencode.jsonc
+"agent": { "auto": { "reasoningEffort": "none" } }   // <- clave TOP-LEVEL, camelCase
+```
+
+Dos cosas que costó descubrir (verificadas capturando el body HTTP real):
+
+1. **`reasoningEffort` va como clave de nivel superior del agente**, camelCase —
+   NO anidada en `options`, NO en snake_case. opencode la mapea a
+   `reasoning_effort` en el cuerpo de la petición. En cualquier otra ubicación
+   se ignora en silencio.
+2. **Solo `reasoning_effort` funciona con LM Studio.** Probados y descartados:
+   `/no_think` en el prompt, `chat_template_kwargs.enable_thinking`,
+   `enable_thinking` top-level — LM Studio no los honra. `reasoning_effort:"none"`
+   → 0 tokens de razonamiento, respuesta directa.
+
+Verificado end-to-end: `auto` envía `reasoning_effort='none'` y responde `391`
+directo; `analyze` no lo envía y conserva el thinking.
 
 ### ⚠️ `instructions` usa rutas ABSOLUTAS
 

@@ -9,6 +9,9 @@ mode: "all"
 model: lmstudio/qwen/qwen3.5-9b
 temperature: 0.2
 top_p: 0.8
+# Este agente conserva el THINKING a proposito (no lleva reasoningEffort). El
+# ejecutor `auto` va sin thinking por velocidad/fiabilidad; el razonamiento
+# profundo se concentra aqui. Ver opencode.jsonc -> agent.auto.reasoningEffort.
 permission:
   edit: deny
   bash: allow
