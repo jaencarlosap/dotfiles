@@ -30,6 +30,7 @@ make restore       # restaura el ultimo respaldo
 | `rules/*.md`             | Reglas anti-slop inyectadas en **todos** los agentes       |
 | `command/*.md`           | Comandos: `/verify`, `/fix`, `/pr`                         |
 | `plugin/verify-on-edit.ts` | Chequeo de compilación/lint tras cada edición            |
+| `plugin/tokens-per-second.ts` | Toast con throughput (tok/s) tras cada respuesta      |
 | `templates/AGENTS.md`    | Plantilla de contexto por-proyecto (`make init-agents`)    |
 | `bin/init-agents.sh`     | Genera un `AGENTS.md` con los comandos ya detectados       |
 
@@ -117,6 +118,65 @@ de repo. opencode lo auto-carga como contexto, así el modelo actúa sin pregunt
 
 Si deniegas una herramienta (p.ej. un `git push`), el agente sigue trabajando y
 busca otra vía en vez de abortar la tarea entera.
+
+### Plugin de tokens/segundo
+
+`plugin/tokens-per-second.ts` muestra un toast tras cada respuesta con los
+tokens del mensaje (entrada→salida) y la velocidad:
+`⚡ 48.3 tok/s · 1,234→320 tok · 🧠80 · 6.6s`. Para vigilar el server local: si
+el número se desploma (de ~50 a ~15) suele ser que el KV cache se salió de la
+VRAM y hay offload a CPU.
+
+**Está DESACTIVADO por defecto** (opt-in). Para encenderlo, abre opencode con la
+variable de entorno:
+
+```bash
+OPENCODE_TPS_ON=1 opencode        # o exporta la var en tu ~/.zshrc
+```
+
+Se dejó apagado porque el toast es transitorio (aparece ~8s y desaparece). El
+plugin se conserva funcional; solo hay que poner la variable para reactivarlo.
+
+### Superficies de la TUI: qué se puede y qué no (comprobado)
+
+Un plugin de **hook** (fichero `.ts` local) solo puede mostrar información con
+`client.tui.showToast` — el **toast**. El resto de `client.tui.*` (`appendPrompt`,
+`publish`, …) no pinta texto fijo. La config nativa `tui` tampoco tiene opción
+para añadir tokens al footer (`Auto · modelo · 13.1s` lo pinta opencode).
+
+Las ubicaciones **persistentes** (panel lateral `sidebar_content`, junto al
+prompt `session_prompt_right`, footer) existen como *slots*, pero son del
+**sistema de plugins de TUI** (JSX + `@opentui/solid`), no de los hooks.
+Probado: un `.tsx` local **no se carga** — esos slots solo los llenan plugins
+internos o **paquetes npm**.
+
+### Opción B — ubicación persistente (pendiente, si algún día se quiere)
+
+Para poner los tokens/tok/s en un sitio fijo (lo ideal: `session_prompt_right`,
+justo al lado de donde escribes), hay que construir un **paquete npm de plugin
+TUI**, no un fichero suelto. Lo investigado deja el camino:
+
+- **Export**: el módulo exporta `{ id, async tui(api) {…} }` (`TuiPluginModule`),
+  no un `Plugin` de hooks.
+- **Registro**: `api.slots.register({ order, slots: { session_prompt_right(_, p) { return <Comp .../> } } })`.
+- **Render**: JSX de `@opentui/solid` con elementos `box` / `text` / `b`
+  (mismo patrón que el plugin interno "Context").
+- **Datos**: `api.state.session.messages(sessionID)` (último mensaje →
+  `tokens{input,output,reasoning}`, `time{created,completed}`), leídos dentro de
+  un `createMemo` para que sea reactivo.
+- **Empaquetado**: directorio con `package.json` + dependencia `@opentui/solid`
+  + build a `.js`, declarado en el array `plugin` de `opencode.jsonc`.
+- **Aviso**: la API de plugins TUI **no está documentada** (sale solo de los
+  type-defs `@opencode-ai/plugin/dist/tui.d.ts` y del binario) → puede cambiar
+  sin previo aviso.
+
+Honestidad sobre la medida: opencode solo expone timing a nivel de **mensaje**
+(`created→completed`), que incluye el time-to-first-token y el tiempo de
+ejecución de herramientas. **No es decode puro.** Por eso salta turnos triviales
+(<40 tokens, donde el TTFT domina y engañaría) y se etiqueta como throughput del
+turno. Para decode exacto: `make bench`. Los tokens de thinking se muestran
+aparte (`🧠`), así ves el coste del razonamiento. Se apaga con
+`OPENCODE_TPS_OFF=1`. Los toasts solo aparecen en la TUI (no en `opencode run`).
 
 ### 6. Thinking híbrido (auto sin thinking, analyze con thinking)
 

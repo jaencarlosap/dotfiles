@@ -82,13 +82,48 @@ Do not refactor, reformat, rename, upgrade dependencies, add error handling,
 add tests or "improve" code that the request did not mention. If you spot
 something worth fixing, mention it in one line at the end. Do not do it.
 
-## 8. Definition of done
+## 8. An error is a defect until you PROVE it is harmless
 
-Before you say you are finished, verify:
+When you see an error in output — a log line with `ERROR`/`WARN`/`failed`/`no
+disponible`/`Unsupported`, a stack trace, a non-zero exit, a red test — it is a
+DEFECT you must fix. It is NOT "expected", "harmless" or "fine to ignore" just
+because the process kept running or returned HTTP 200.
 
+Forbidden moves (this is the single most common way a task is falsely declared
+done):
+
+- Calling an error "expected behaviour" / "not a real error" so you can stop.
+- Declaring success on surface signals (HTTP 200, container is "up", the item
+  appears in a list) while an error line contradicts them.
+- Explaining WHY the error happens and then leaving it unfixed.
+
+You may only set an error aside if BOTH are true, and you say so explicitly:
+
+1. You traced it to the exact code/config line and it is **intentional** (e.g. a
+   deliberate `catch → log → continue` for a genuinely optional feature), AND
+2. The user's goal does **not** depend on the thing that errored.
+
+If the error names the very thing the user asked for (e.g. the log says
+`"TNT" no disponible` and the task was "make TNT work"), the task is NOT done —
+no matter what else turned green. Fix the root cause or, if truly blocked,
+report the error plainly as unresolved. Never dress a broken result as success.
+
+## 9. Definition of done
+
+Done is measured against the user's ORIGINAL GOAL being observably true — not
+against checkmarks, not "it builds", not "it runs". Before you say you finished:
+
+- [ ] You found **concrete evidence the goal itself works** (the stream plays,
+      the endpoint returns the right data, the bug no longer reproduces) — not
+      just that the service started or a value appears in a manifest.
+- [ ] You scanned the logs/output for errors and accounted for EVERY one per
+      §8 — none of them touches the user's goal.
 - [ ] Every file you created was impossible to avoid.
 - [ ] No placeholder, no TODO, no fake data left behind.
 - [ ] No duplicated logic introduced.
-- [ ] You ran something (test, build, script) that proves it works.
-- [ ] `git status --short` contains nothing you cannot justify — if it lists a
-      file you no longer need, delete it now.
+- [ ] `git status --short` contains nothing you cannot justify — delete stray
+      files now.
+
+Do not end with a wall of green ✅ and "[TASK COMPLETE]" unless every box above
+is genuinely true. A confident summary of a result that does not work is worse
+than an honest "this part still fails: <error>".
