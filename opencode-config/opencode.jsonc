@@ -1,0 +1,671 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // ─────────────────────────────────────────────────────────────
+  // EL BACKEND YA NO ES LM STUDIO. Es **llama-swap** delante de llama.cpp,
+  // en el mismo sitio (http://pcgamer:1234/v1). Se comprueba en un segundo:
+  //
+  //   curl -s http://pcgamer:1234/v1/models | grep owned_by   -> "llama-swap"
+  //
+  // La clave del provider sigue llamandose "lmstudio" mas abajo por no tocar
+  // todas las referencias `lmstudio/...` (config, agent/*.md, bench, README).
+  // Es un NOMBRE HEREDADO, no una descripcion. Lo que SI cambia de verdad son
+  // dos comportamientos, y los dos importan:
+  //
+  //  1) LOS IDs SON OTROS. llama-swap expone los nombres de SU config, no las
+  //     rutas de HuggingFace. Hoy son exactamente tres:
+  //         gpt-oss-20b     qwen-35b (cargado)     qwen-9b
+  //     Los de antes (`qwen3.5-9b-mtp`, `openai/gpt-oss-20b`,
+  //     `qwen/qwen3.5-9b`) NO existen aqui.
+  //
+  //  2) UN ID QUE NO EXISTE YA **NO** ES SILENCIOSO. LM Studio caia de vuelta
+  //     al modelo cargado sin decir nada — de ahi el aviso del README viejo.
+  //     llama-swap corta:
+  //         HTTP 404 {"error":{"message":"no router for requested model"}}
+  //     Es mejor noticia de lo que parece: un ID mal escrito ahora se ve.
+  //     Pero significa que un config desactualizado no "va un poco peor",
+  //     sino que NO ARRANCA. Compruebalo con `make models`.
+  //
+  // ─────────────────────────────────────────────────────────────
+  // Modelo principal: qwen-35b = Qwen3.6 35B A3B (MoE, ~3B activos por token)
+  // en UD-IQ3_XXS, cargado con los expertos parcialmente en CPU. Los detalles
+  // de arranque medidos estan en `provider.lmstudio.models` mas abajo.
+  //
+  // Medido contra pcgamer (mismo prompt, misma maquina):
+  //
+  //   modelo                  decode     tool round-trip   estado
+  //   qwen-35b (UD-IQ3_XXS)   60.3 t/s   PASS              PRINCIPAL
+  //   qwen-9b  (Q4_K_M, MTP)  61.4 t/s   PASS              fallback
+  //   gpt-oss-20b (MXFP4)     56.5 t/s   PASS (4/4)        fallback
+  //   gemma-4-26b-a4b         17.2 t/s   PASS              descartado, lento
+  //
+  // ⚠️ CORRECCION HISTORICA: aqui ponia "qwen3.6-35b-a3b no carga (OOM: ~20GB
+  // no entran en 12GB)". Eso era cierto para el Q4_K_M. Con UD-IQ3_XXS y
+  // `--n-cpu-moe 16` SI carga, y a 60 t/s. La fila vieja ya no aplica.
+  //
+  // LO QUE **NO** ESTA MEDIDO CON ESTE MODELO (heredado, tratalo como
+  // pendiente, no como verdad): el benchmark de codigo con tests ocultos, el
+  // efecto de `reasoningEffort`, y `temperature`/`top_p` de los agentes.
+  //
+  // HISTORICO — "respuestas vacias": con LM Studio y la configuracion de carga
+  // ANTERIOR el server devolvia `content` VACIO en peticiones sin mensaje
+  // `system` (9/9 sin system vs 0/9 con system). Era el ESTADO DE CARGA del
+  // servidor, no el mensaje system. Se deja anotado porque si vuelven las
+  // respuestas vacias, lo primero que hay que mirar es como esta cargado el
+  // modelo — no el cliente.
+  // ─────────────────────────────────────────────────────────────
+  "model": "lmstudio/qwen-35b",
+  // Modelo "pequeño": lo usa opencode para tareas triviales (titulos de
+  // sesion, resumenes de compactacion).
+  // Va al MISMO modelo a proposito. Con llama-swap el argumento es AUN mas
+  // fuerte que con LM Studio: apuntar a otro modelo no solo paga una carga,
+  // es que llama-swap DESCARGA el actual para meter el otro (y luego lo
+  // vuelve a descargar en el siguiente turno). Un solo modelo residente =
+  // cero swaps. Por lo mismo `auto` declara ESTE modelo explicitamente. El
+  // argumento valia doble cuando habia subagentes: un `task` a un subagente
+  // con otro modelo pagaba dos swaps enteros. Ya no hay subagentes (ver mas
+  // abajo), pero la regla se queda para el dia que vuelva a haberlos.
+  "small_model": "lmstudio/qwen-35b",
+  // Agente primario por defecto al iniciar (Tab para cambiar). Debe ser primary.
+  "default_agent": "auto",
+  // ─────────────────────────────────────────────────────────────
+  // Este README documenta comportamiento verificado contra el BINARIO de
+  // opencode v1.18.19 (la formula de compactacion se saco de ahi). Si el
+  // binario se actualiza solo, esa documentacion deja de ser cierta sin que
+  // nadie se entere. "notify" avisa y deja la decision.
+  "autoupdate": "notify",
+  // Setup 100% local (LM Studio en la LAN). No hay nada que compartir fuera.
+  "share": "disabled",
+  // Snapshots de ficheros: red de seguridad para un agente autonomo que edita
+  // solo. Con un modelo pequeño equivocandose mas, poder deshacer importa mas.
+  "snapshot": true,
+  // ─────────────────────────────────────────────────────────────
+  // ANTI-SLOP: reglas que se inyectan en el prompt de TODOS los agentes
+  // (auto, build, plan...). Van aqui y no dentro de agent/*.md
+  // precisamente para no duplicar la misma logica en varios sitios.
+  // OJO: las rutas relativas se resuelven contra el DIRECTORIO DEL PROYECTO,
+  // no contra este archivo. Con "rules/*.md" no cargaba nada (verificado).
+  // Por eso va ruta absoluta via {env:HOME}.
+  // Verifica con:
+  //   opencode run "sin usar herramientas: tienes una seccion 'No dummy, no placeholder, no fake'?"
+  // ─────────────────────────────────────────────────────────────
+  "instructions": [
+    "{env:HOME}/.config/opencode/rules/engineering-discipline.md",
+    // COMPENSAR LA FALTA DE CONOCIMIENTO DEL MODELO PEQUENO. Un 9B/20B local
+    // razona bien pero RECUERDA mal: se inventa firmas, flags y claves de
+    // config con toda la confianza del mundo. Esta regla convierte "adivinar"
+    // en "mirarlo", con una escalera de lookups ordenada por coste (repo ->
+    // paquete en disco -> --help -> probe -> web) y un presupuesto de 2
+    // lookups antes de escribir codigo, para no perder la velocidad.
+    // Coste MEDIDO (ablacion sobre la misma peticion, usage.prompt_tokens del
+    // server): 1231 tokens/turno = 3.1% del umbral de 39808. La estimacion
+    // inicial decia ~920: contar palabras x4/3 se queda corto con markdown.
+    "{env:HOME}/.config/opencode/rules/knowledge-protocol.md"
+  ],
+  // ─────────────────────────────────────────────────────────────
+  // SKILLS — el mismo problema que las reglas de arriba, pero pagado solo
+  // cuando hace falta.
+  //
+  // Una regla en `instructions` va ENTERA en el prompt de cada turno (medido:
+  // knowledge-protocol = 1231 tok/turno). Una skill NO: en el prompt solo va su
+  // `name` + `description` (~60-90 tok las dos juntas), y el cuerpo entra
+  // unicamente cuando el modelo llama a la herramienta `skill`. Por eso el
+  // detalle largo — "como se busca en la web", "que fuente vale" — vive aqui y
+  // no en las reglas.
+  //
+  // Viven en `skill/<nombre>/SKILL.md` (el fichero se llama SKILL.md EXACTO y
+  // `name:` debe coincidir con el nombre de la carpeta). Se enlazan con
+  // `make install`; comprueba que opencode las ve con:
+  //
+  //   opencode debug skill | python3 -c "import sys,json;[print(s['name']) for s in json.load(sys.stdin)]"
+  //
+  //   stop-and-verify  cuando PARAR porque no lo sabes (senales, que cuenta
+  //                    como prueba, presupuesto, como decir "no verificado").
+  //   web-research     como buscarlo de verdad: `web.sh search` / `web.sh read`
+  //                    (bin/web.sh, por bash = 0 tokens hasta usarlo), docs.sh,
+  //                    que fuentes valen y cuanto leer.
+  //   unstick          algo ha fallado DOS veces: leer el error sin filtros,
+  //                    nombrarlo, reducirlo, buscarlo, cambiar de enfoque.
+  //                    La dispara tambien el plugin loop-breaker por su nombre.
+  //   new-project      arrancar de cero sin escribir 10 ficheros antes de
+  //                    ejecutar nada: toolchain, generador oficial, NO
+  //                    interactivo, probar el esqueleto, commit, y luego una
+  //                    cosa cada vez.
+  //   failing-test     un test en rojo: leer el fallo entero, decidir CON
+  //                    CRITERIO si esta mal el codigo o el test, arreglo minimo.
+  //                    Su caso flagrante ademas se BLOQUEA en anti-slop-guard
+  //                    (t.Skip / it.skip / @pytest.mark.skip en un fichero de
+  //                    test): un test apagado da verde y esconde el defecto.
+  //   long-running     lo que no termina solo (servidor, docker compose, watcher):
+  //                    lanzar en background con log, esperar por READINESS
+  //                    (polling, no `sleep`), verificar, y SIEMPRE matarlo.
+  //                    Incluye los comandos que se cuelgan pidiendo stdin.
+  //   explore-codebase orientarse en un repo ajeno en ~6 comandos sin volcar
+  //                    ficheros enteros al contexto.
+  //   dependencies     añadir/subir un paquete sin inventarse versiones ni
+  //                    editar a mano el manifest o el lockfile.
+  //   jira-ticket      Historias de Usuario en formato Jira. ERA UN AGENTE
+  //                    (`agent/ticket.md`) y se convirtio a skill a peticion del
+  //                    usuario: se gana poder pedir un ticket sin cambiar de
+  //                    agente con Tab —y con el contexto del repo que ya tienes
+  //                    delante—, se pierde lo que solo un agente puede fijar
+  //                    (tools off, temperature 0.7, edit: deny). Esos limites
+  //                    ahora son texto al principio de la skill: no escribir
+  //                    ficheros, no abrir otra skill, no buscar en la web.
+  //   enough-context   la PUERTA de entrada: antes de escribir codigo, inventario
+  //                    de lo que la tarea necesita, cada dato marcado KNOWN (con
+  //                    fuente de ESTA sesion) o UNKNOWN, y a resolver los UNKNOWN
+  //                    que cambian el codigo — hasta la web si hace falta — con
+  //                    presupuesto de 6 lookups y salida por "asuncion declarada".
+  //                    OJO: no depende de que el modelo abra la skill. El plugin
+  //                    ground-truth inyecta la puerta en el PRIMER turno de cada
+  //                    sesion (~120 tok, una sola vez; OPENCODE_GATE_OFF=1 la
+  //                    apaga). La skill es el procedimiento largo detras.
+  //   landing-page     una landing / web de producto: orden de secciones con los
+  //                    numeros de conversion detras, escala tipografica y fuentes
+  //                    de 2026, color en OKLCH + dark mode con tokens, las tres
+  //                    lineas esteticas (techno-futurist / editorial / anti-grid),
+  //                    bento, motion que si se envia, presupuesto de Core Web
+  //                    Vitals, a11y, legibilidad para buscadores con IA, y la
+  //                    checklist anti-slop (el gradiente indigo-violeta, las tres
+  //                    tarjetas con emoji, "Elevate your workflow").
+  //
+  // COSTE MEDIDO (no estimado). Mismo prompt trivial, leyendo el `input` real
+  // del server con `opencode export <session>`:
+  //   sin estas skills .................... 8946 tok de prompt fijo
+  //   con las 4, descripciones largas ..... 9627  (+681/turno)
+  //   con las 4, apretadas ................ 9522  (+576/turno)
+  //   con las 4 + disparadores en ESPAÑOL . 9656  (+710/turno, 177 por skill)
+  //   con las 8 actuales .................. 10342 (+1396/turno, 174 por skill)
+  //
+  // 1396 tok/turno es el 3.1% del umbral de compactacion (45616). Es el precio
+  // de que el modelo tenga un procedimiento al que agarrarse en 8 situaciones
+  // donde antes improvisaba. Si una skill no se dispara nunca, quitala: cuesta
+  // igual.
+  //
+  // Los disparadores en español cuestan 134 tok/turno y se quedan porque
+  // FUNCIONAN: con la descripcion solo en ingles, "Crea desde cero un proyecto
+  // nuevo en Go" NO abrio `new-project` (verificado, run completo sin una sola
+  // llamada a `skill`). Añadiendo "crea un proyecto nuevo / desde cero /
+  // arranca un repo", la cargo en los dos runs siguientes.
+  //
+  // Solo se paga el nombre + la descripcion; el CUERPO (5-6 KB cada una) entra
+  // unicamente cuando el modelo llama a `skill`. Si añades una quinta, mide otra
+  // vez: 177 tok/turno cada una no es gratis contra un umbral de 45616.
+  //
+  // OJO: las skills NO se cargan sin `"skill": "allow"` en `permission`
+  // (ver mas abajo), y opencode NO recarga config en caliente: hay que salir y
+  // volver a entrar para que aparezcan.
+  // ─────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // ANTI-DERIVA: el modelo "pierde el hilo" y acaba haciendo algo que no
+  // tiene que ver con el objetivo inicial. Eso NO es que el modelo sea
+  // tonto: es la compactacion. Al llenarse el contexto, el resumen se come
+  // el objetivo original (una linea al principio de una conversacion larga)
+  // y deja sobre todo la actividad mecanica reciente -> el modelo sigue la
+  // ACTIVIDAD en vez del OBJETIVO.
+  // ─────────────────────────────────────────────────────────────
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "tail_turns": 3,
+    "keep": {
+      "tokens": 12000
+    },
+    "buffer": 25000
+  },
+  // ─────────────────────────────────────────────────────────────
+  // Trunca outputs gigantes de herramientas (un `grep -r` o un `cat` largo
+  // pueden meter 15k tokens de golpe y disparar la compactacion). Lo que
+  // pasa del limite se guarda en disco y al modelo le llega un preview.
+  // Defaults de opencode: 2000 lineas / 51200 bytes — demasiado para un local.
+  // ─────────────────────────────────────────────────────────────
+  "tool_output": {
+    "max_lines": 400,
+    "max_bytes": 16000
+  },
+  "agent": {
+    // `reasoningEffort` va como clave de NIVEL SUPERIOR del agente (camelCase),
+    // NO anidada en `options` ni en snake_case — asi lo documenta opencode y
+    // asi el AI SDK lo mapea a `reasoning_effort` en el body. Verificado contra
+    // LM Studio: acepta none/low/medium/high y las cuatro responden bien.
+    // "low" — y esto esta MEDIDO con tareas reales, no con prompts de juguete.
+    //
+    // Benchmark objetivo (2 tareas de codigo con tests OCULTOS que el agente
+    // nunca ve; se puntua con `go test`, no con palabras clave):
+    //
+    //   effort  tarea            resultado   tiempo
+    //   low     Chunk()          PASS         80s
+    //   low     Truncate() bug   PASS         99s
+    //   high    Chunk()          PASS        431s
+    //   high    Truncate() bug   PASS        680s
+    //
+    // 4/4 aciertan y 0 funciones borradas. "high" tarda 5-7x MAS para el
+    // MISMO resultado. En un bucle agentico el razonamiento se paga en CADA
+    // turno, asi que no es gratis.
+    //
+    // OJO: una medicion anterior decia "high solo cuesta ~43 tokens". Era
+    // ENGAÑOSA: estaba hecha con un "cuanto es 17*23" de una sola vuelta. Con
+    // prompts de 8k tokens y varios turnos el coste se dispara. No midas el
+    // razonamiento con preguntas triviales.
+    //
+    // ⚠️ ESA TABLA ES DE gpt-oss-20b. Con qwen-35b esta SIN REPETIR: se deja
+    // "low" porque el argumento de fondo (el razonamiento se regenera en CADA
+    // turno del bucle) no depende del modelo, no porque este medido aqui.
+    // Lo que si esta comprobado contra el server: qwen-35b ACEPTA
+    // `reasoning_effort` y devuelve el razonamiento en `reasoning_content`,
+    // aparte del contenido.
+    //
+    // ESTE es el unico sitio donde el effort aplica de verdad al agente.
+    // Habia un `options: { "reasoning_effort": "medium" }` dentro de la
+    // entrada del modelo, en `provider`, y era CONFIG MUERTA: no sobreescribe
+    // al del agente (README, tabla de `chat.params`). Si quieres subirlo a
+    // "medium" para `auto`, se cambia AQUI — y cuenta con que lo pagas en
+    // cada vuelta del bucle, no una vez.
+    "auto": {
+      "reasoningEffort": "low"
+    },
+    // La descripcion de la herramienta `task` ENUMERA todos los subagentes
+    // disponibles, y cada uno se paga en tokens en cada turno ademas de dar
+    // opciones de mas a un modelo pequeño. Medido: quitar `explore` y
+    // `general` son 129 tok/turno menos.
+    //
+    // 2026-09-07: ya no queda NINGUN subagente. `analyze` se elimino (su
+    // trabajo lo hace ahora `auto` con `web.sh`, que trunca su propia salida),
+    // asi que estos dos `disable` dejan la lista vacia y `task` no tenia a
+    // quien llamar. Por eso `task: false` esta en `agent/auto.md`: la
+    // descripcion base de la herramienta son 2305 chars del `task.txt` de
+    // upstream, ~760 tok/turno mas. Si algun dia vuelve un subagente, primero
+    // se crea y DESPUES se reactiva `task`; al reves solo da una herramienta
+    // que falla siempre.
+    "explore": {
+      "disable": true
+    },
+    "general": {
+      "disable": true
+    },
+    // El agente interno que hace el resumen. Por defecto comprime "todo por
+    // igual" y ahi es donde se pierde el objetivo. Este prompt le obliga a
+    // conservar el objetivo original PALABRA POR PALABRA.
+    //
+    // ⚠️ LA RUTA DE LA ULTIMA LINEA IMPORTA MAS DE LO QUE PARECE. Decia
+    // `.agent_progress.md`, la convencion VIEJA, que ya no existe en ningun
+    // sitio. Resultado medido (T2b, 2026-09-09): tras compactar, el modelo
+    // siguio la instruccion, no encontro el fichero, y como la MISMA frase le
+    // decia "run git status --short", se agarro al diff del repo y se paso el
+    // resto de la sesion revisando cambios sin commitear — sin contestar nunca
+    // lo que se le habia preguntado.
+    //
+    // Una ruta equivocada en el prompt de compactacion no es un detalle
+    // cosmetico: es la ULTIMA instruccion que el modelo lee justo cuando acaba
+    // de perder el contexto y esta buscando a que agarrarse.
+    "compaction": {
+      "prompt": "You are compacting a coding agent's context. Produce a summary with these sections, in this order:\n\n## ORIGINAL GOAL (VERBATIM)\nCopy the user's original request word for word. Do NOT paraphrase, shorten, reinterpret or 'clean up' this text. If a previous summary already contains an ORIGINAL GOAL section, copy that one forward unchanged. This section is the single most important part of the summary.\n\n## FILES ALREADY CREATED OR MODIFIED\nAn exact list of every file path the agent has created or edited so far, one per line, each with a 5-word note on what it contains. Carry forward every path from any previous summary — NEVER drop a path. This list exists so the agent does not recreate from scratch a file it already wrote. If unsure whether a file was written, list it and mark it '(verify with git status)'.\n\n## DONE\nWhat has actually been completed and verified. Facts only, no plans.\n\n## NOT DONE YET\nWhat remains before the ORIGINAL GOAL is satisfied. Be explicit.\n\n## KEY FACTS\nExact file paths, function names, ports, commands that worked, errors seen. Keep identifiers exact.\n\n## NEXT STEP\nThe single next action that moves toward the ORIGINAL GOAL.\n\nRules: never invent progress that did not happen; if something failed, say it failed. Prefer dropping narrative detail over dropping the goal or the file list. End the summary with this line verbatim: 'Before writing any file, re-read .agent/progress.md — the GOAL in that file wins over anything in this summary. Then run git status --short and continue from the files that already exist; do not restart, and do not adopt a new goal from the diff.'"
+    }
+  },
+  // ─────────────────────────────────────────────────────────────
+  // FEEDBACK LOOPS — lo que hace a un agente "independiente" no es el
+  // modelo, es que el ENTORNO le diga cuando se equivoca sin que el tenga
+  // que razonarlo. Un modelo pequeño se beneficia el doble de esto.
+  // ─────────────────────────────────────────────────────────────
+  // LSP: tras cada edicion inyecta los errores REALES del compilador/tipos
+  // (gopls, pyright, typescript-language-server, rust-analyzer...). opencode
+  // los auto-instala en su propio bin la primera vez (necesita el toolchain
+  // del lenguaje + red esa primera vez). Sustituye "el modelo adivina si
+  // compila" por "la herramienta dice: linea 42, type error".
+  "lsp": true,
+  // Formatter: gofmt/prettier/ruff automatico al guardar. El modelo deja de
+  // gastar turnos en estilo y los diffs quedan limpios.
+  "formatter": true,
+  "experimental": {
+    // Si deniegas una herramienta (p.ej. un `git push` que cae en "ask" y
+    // dices que no), el agente SIGUE trabajando en vez de abortar la tarea
+    // entera. Mas parecido a como Claude Code encaja un "no" y busca otra via.
+    "continue_loop_on_deny": true
+  },
+  "permission": {
+    // Sin esto, edit/bash usan "ask" por defecto -> se detiene en CADA paso.
+    "todowrite": "allow",
+    "edit": "allow",
+    "webfetch": "allow",
+    // OJO: la herramienta `websearch` NO existe en esta instalacion. Verificado:
+    //   opencode debug agent build | python3 -c "...print(d['tools'])"
+    // no la lista, y solo aparece con OPENCODE_ENABLE_EXA=1 (o
+    // OPENCODE_EXPERIMENTAL=1). Este permiso queda declarado por si algun dia se
+    // enciende, pero hoy no habilita nada. La busqueda web real la hace
+    // `bin/web.sh` por bash (ver mas abajo).
+    "websearch": "allow",
+    "question": "allow",
+    // SIN ESTO LAS SKILLS NO SE PUEDEN CARGAR. La herramienta `skill` pide
+    // permiso con la accion "skill", y cuando ninguna regla casa opencode
+    // devuelve "ask" (binario v1.18.19: `evaluate(...) ?? {action:"ask"}`).
+    // En modo no interactivo (`opencode run`) un "ask" se auto-rechaza -> el
+    // agente ve la skill en su lista, la intenta cargar y se come un rechazo.
+    "skill": "allow",
+    // Leer FUERA del proyecto pide permiso, y en `opencode run` (no
+    // interactivo) un "ask" se auto-rechaza. Eso rompia justo el flujo que
+    // queremos: en un run real el agente se bajo el tarball de un paquete a
+    // /tmp para comprobar una firma y el grep sobre lo descomprimido murio con
+    //   "! permission requested: external_directory (/tmp/zod_unpack/...);
+    //    auto-rejecting"
+    // Se abre SOLO el temporal (en macOS /tmp es un symlink a /private/tmp, y
+    // el permiso ve la ruta ya resuelta: hacen falta los dos patrones).
+    // El resto sigue en "ask": el orden importa, la ULTIMA regla que casa gana.
+    "external_directory": {
+      "*": "ask",
+      "/tmp/**": "allow",
+      "/private/tmp/**": "allow",
+      "/var/folders/**": "allow"
+    },
+    "bash": {
+      // Permite todo por defecto, pero pide confirmacion en lo destructivo.
+      // OJO con el orden: opencode aplica la ULTIMA regla que casa, asi que lo
+      // general va primero y lo especifico despues.
+      "*": "allow",
+      // Las formas CON argumentos...
+      "rm -rf *": "ask",
+      "git push *": "ask",
+      "git reset --hard *": "ask",
+      "sudo *": "ask",
+      // ...y las formas SIN argumentos, que son las que se escapaban: un
+      // patron que acaba en " *" no casa con el comando pelado, y
+      // `git reset --hard` a secas es a la vez comunisimo y destructivo.
+      "rm -rf": "ask",
+      "git push": "ask",
+      "git reset --hard": "ask",
+      "sudo": "ask"
+    },
+    // VERIFICADO en vivo: `*.env` SI casa con un `.env` pelado — se pidio al
+    // agente leerlo y el permiso lo denego.
+    //
+    // PERO esto solo cubre la herramienta `read`. `bash` esta en "allow", asi
+    // que `cat .env` se lo saltaba entero. Taparlo con patrones de bash es un
+    // juego de topos (`less`, `head`, `xxd`, `awk`…), asi que lo bloquea el
+    // plugin anti-slop-guard, que mira el comando de verdad.
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    }
+  },
+  "provider": {
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://pcgamer:1234/v1"
+      },
+      "models": {
+        // ─────────────────────────────────────────────────────────
+        // De donde salen estos numeros (formula verificada en el binario
+        // de opencode v1.18.19, SessionCompaction -> Is()):
+        //
+        //   umbral = limit.input ? (limit.input - compaction.reserved)
+        //                        : (context - min(output, 32000))
+        //
+        // Sin `limit.input` la rama de `reserved` NO se ejecuta: `reserved`
+        // se calcula y se DESCARTA. Por eso no esta en el config.
+        //
+        // Tres reglas al tocar un `limit`:
+        //
+        // 1) `context` <= el `-c` REAL con el que arranco llama.cpp. Con
+        //    llama-swap ese numero esta en la propia linea de comandos y se
+        //    puede leer sin cargar nada:  make ctx
+        // 2) Deja colchon (~3k) entre `context` y ese `-c`: el contador de
+        //    opencode y el del server no cuadran al token, y pasarse no da
+        //    error — llama.cpp descarta contexto por delante en silencio.
+        // 3) `output` no es solo el techo de la respuesta: el thinking sale
+        //    del MISMO presupuesto. Corto de mas y la respuesta se trunca a
+        //    mitad de razonamiento. Y ojo, `output` se RESTA del umbral de
+        //    compactacion: subirlo encoge la conversacion util.
+        // ─────────────────────────────────────────────────────────
+        // ── PRINCIPAL ────────────────────────────────────────────
+        // Qwen3.6 35B A3B: MoE de 35B totales con ~3B activos por token, en
+        // UD-IQ3_XXS. Entra en 12GB de VRAM porque llama.cpp deja 16 capas de
+        // expertos en CPU y cuantiza el KV cache a q4_0.
+        //
+        // Linea de arranque REAL, no de oidas
+        // (`curl -s http://pcgamer:1234/running`):
+        //
+        //   -c 49152 -ngl 99 -np 1 -fa 1 --n-cpu-moe 16
+        //   --cache-type-k q4_0 --cache-type-v q4_0 -b 512 -ub 512
+        //   --spec-type draft-mtp --spec-draft-n-max 4
+        //
+        // Comprobado contra el server:
+        //   - n_ctx = 49152  -> context 46000 deja ~3.1k de colchon (regla 2).
+        //   - devuelve `reasoning_content` APARTE de `content`, luego
+        //     "reasoning": true no es decorativo: sin el, opencode trata el
+        //     razonamiento como respuesta.
+        //   - acepta `reasoning_effort`.
+        //   - `--spec-type draft-mtp`: el MTP va en el propio GGUF y lo aplica
+        //     llama.cpp como speculative decoding. Medido en una respuesta
+        //     corta: draft_n 7 / draft_n_accepted 7, 60.3 tok/s.
+        //
+        // OJO CON `-np 1`: UN SOLO SLOT. Dos peticiones simultaneas se
+        // serializan, asi que un `task` a un subagente NO corre en paralelo
+        // con el primario — espera. Es otra razon para que todos los agentes
+        // declaren este mismo modelo.
+        //
+        // ── De donde sale output = 14000 ─────────────────────────
+        // MEDIDO, no estimado. Misma pregunta de codigo (bug de concurrencia
+        // en Go: explicar + proponer fix + escribir el codigo final), contra
+        // este modelo, contando `usage.completion_tokens`:
+        //
+        //   effort   completion_tokens   finish_reason
+        //   low                  8 010   stop
+        //   low                  4 074   stop      <- MISMO effort, la mitad
+        //   low                  6 265   stop
+        //   medium              11 171   stop
+        //   high                 3 215   stop
+        //
+        // Dos lecturas, y las dos cambian decisiones:
+        //
+        // 1) El techo real de un turno de coding es ~11k tokens, casi todo
+        //    razonamiento (en el de 11 171 fueron ~9.5k de `reasoning_content`
+        //    y ~800 de respuesta). Con el `output: 8000` que habia aqui, ESE
+        //    turno se corta a media frase de razonamiento y se pierde entero.
+        //    14000 cubre el maximo observado con margen.
+        //
+        // 2) `reasoning_effort` NO ordena esos numeros: "high" (3 215) salio
+        //    por debajo de LOS TRES "low", y entre los propios "low" hay un
+        //    factor 2 (4 074 vs 8 010). O el backend no lo propaga a este
+        //    modelo, o la varianza se lo come. **No decidas
+        //    nada sobre `reasoningEffort` con este modelo hasta medirlo con
+        //    n>=3 por nivel** — la tabla del bloque `agent` de mas arriba es
+        //    de gpt-oss y NO se ha reproducido aqui.
+        //
+        // El precio de subir `output`: sale del umbral de compactacion.
+        // 46000 - 14000 = 32000 tokens de conversacion antes de compactar.
+        "qwen-35b": {
+          "name": "Qwen3.6 35B A3B (UD-IQ3_XXS)",
+          "tools": true,
+          "reasoning": true,
+          "limit": {
+            "context": 105000,
+            "output": 8192
+          }
+        },
+        // ── Fallbacks. NO estan cargados ─────────────────────────
+        // llama-swap carga bajo demanda: pedir uno de estos DESCARGA el 35B y
+        // carga este otro. No es gratis, y con `-np 1` tampoco es concurrente.
+        //
+        // ⚠️ Sus `limit` son los que tenian en la epoca de LM Studio y NO
+        // estan re-verificados contra el `-c` de llama-swap, porque leerlo
+        // obliga a cargarlos. Antes de usar uno en serio:
+        //     make ctx     (con ese modelo cargado)
+        "qwen-9b": {
+          "name": "Qwen3.5 9B MTP (Q4_K_M)",
+          "tools": true,
+          "reasoning": true,
+          "limit": {
+            "context": 66000,
+            "output": 16000
+          }
+        },
+        "gpt-oss-20b": {
+          "name": "gpt-oss-20b (MoE 21B/3.6B activos)",
+          "tools": true,
+          "reasoning": true,
+          "limit": {
+            "context": 48000,
+            "output": 8192
+          }
+        }
+        // NOTA: aqui habia una cuarta entrada, `qwen/qwen3.5-9b` (el mismo 9B
+        // en Q6_K). Se quita porque ya NO EXISTE en llama-swap: no aparece en
+        // /v1/models y pedirla devuelve
+        //   404 {"error":{"message":"no router for requested model"}}
+        // Un modelo declarado que no existe no es documentacion, es una trampa.
+      }
+    }
+  },
+  "plugin": [
+    "@warp-dot-dev/opencode-warp@0.1.5"
+  ],
+  // ─────────────────────────────────────────────────────────────
+  // MCP: NINGUNO, y es deliberado.
+  //
+  // Aqui habia un servidor `duckduckgo` en docker. Se quita porque ESTA ROTO:
+  // DuckDuckGo bloquea a esta maquina. Comprobado llamando al servidor por
+  // stdio (JSON-RPC, tools/call name=search):
+  //
+  //   "Failed to retrieve results from DuckDuckGo:
+  //    https://html.duckduckgo.com/html 202 Ratelimit"
+  //
+  // Y por curl directo devuelve un captcha ("select all squares containing a
+  // duck"), tanto en GET como en POST. O sea: `analyze` tenia una herramienta
+  // de busqueda que solo devolvia errores.
+  //
+  // Ademas no era gratis: declarar CUALQUIER servidor MCP inyecta 3 tools de
+  // fontaneria (read_mcp_resource, list_mcp_resources,
+  // list_mcp_resource_templates) en el prompt de TODOS los agentes. Medido
+  // contra el server (usage.prompt_tokens real): 8581 -> 8384 = 197 tokens
+  // por turno. Menos de lo que decia el README viejo (~371), pero 197 tokens
+  // por turno por una herramienta que no funciona es un mal trato.
+  //
+  // El sustituto es `bin/docs.sh` (registros de paquetes: npm, PyPI,
+  // crates.io, proxy.golang.org, MDN, Wikipedia). Se llama desde `bash`, asi
+  // que cuesta 0 tokens de esquema hasta que se usa, y esas APIs no tienen ni
+  // captcha ni rate-limit agresivo.
+  //
+  // Si algun dia quieres busqueda web general de verdad, hace falta un backend
+  // con clave (Brave/Serper/Tavily): DuckDuckGo por scraping ya no es viable.
+  // ─────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // MCP. Comprueba el estado real con:  make mcp   (opencode mcp list)
+  //
+  // OJO CON LA CLAVE: es `enabled`, NO `enable`. `enable` se ignora EN
+  // SILENCIO — no da error, simplemente no hace nada. Aqui estaba mal escrito
+  // en los dos servidores. Daba igual porque por defecto estan encendidos,
+  // pero un `"enable": false` NO habria desactivado nada.
+  //
+  // Y ojo con lo que significa "connected" en `opencode mcp list`: significa
+  // que el proceso arranca y responde al handshake. NO significa que sus
+  // herramientas funcionen (ver duckduckgo aqui abajo).
+  //
+  // COSTE: cada servidor declarado inyecta 3 tools de fontaneria
+  // (read_mcp_resource, list_mcp_resources, list_mcp_resource_templates) en el
+  // prompt de TODOS los agentes y en TODOS los turnos. Medido: 197 tok/turno.
+  // Lo paga `auto` use MCP o no (y lo pagaba tambien `analyze` mientras
+  // existio: era por agente, no por uso).
+  // ─────────────────────────────────────────────────────────────
+  "mcp": {
+    // ⚠️ CONECTA PERO NO SIRVE. El servidor arranca y `opencode mcp list` lo
+    // da por bueno, pero CADA busqueda devuelve:
+    //
+    //   "Failed to retrieve results from DuckDuckGo:
+    //    https://html.duckduckgo.com/html 202 Ratelimit"
+    //
+    // DuckDuckGo bloquea esta maquina: por curl directo sirve un captcha de
+    // patos, en GET y en POST. Verificado tambien end-to-end con el modelo:
+    // llama a `duckduckgo_search` 4 veces reformulando la query, se come 4
+    // errores y acaba contestando "no encontre informacion" sobre un tema que
+    // existe de sobra. Es decir: paga 197 tok/turno + turnos perdidos a cambio
+    // de nada.
+    //
+    // Alternativa que SI funciona y cuesta 0 tokens de esquema: `bin/docs.sh`
+    // (npm, PyPI, crates.io, pkg.go.dev, MDN, Wikipedia), que se llama por bash.
+    // Para busqueda web general de verdad hace falta un backend con clave
+    // (Brave/Serper/Tavily); el scraping de DuckDuckGo desde aqui esta muerto.
+    //
+    // APAGADO (2026-09-01). Estuvo encendido a peticion del usuario mientras no
+    // habia alternativa. Ahora la hay (`bin/web.sh`) y este servidor sigue roto:
+    // probado por stdio en esa fecha, `tools/call name=search` devuelve
+    //   "Failed to retrieve results from DuckDuckGo:
+    //    https://lite.duckduckgo.com/lite/ 202 Ratelimit"
+    // Fijate en el HOST: usa `lite.duckduckgo.com`, que es exactamente el que da
+    // 202 desde aqui. `html.duckduckgo.com` responde 200 — por eso el respaldo
+    // de web.sh SI funciona y este no. No es "DuckDuckGo bloquea la maquina", es
+    // el endpoint que eligio este servidor.
+    //
+    // Y no era gratis: en los dos runs de prueba con qwen, el modelo llamaba a
+    // `duckduckgo_search` ANTES que a web.sh — un turno tirado en cada busqueda
+    // — mas 197 tok/turno de las 3 tools de fontaneria MCP en TODOS los agentes.
+    // Se deja declarado: volver a encenderlo es cambiar false por true.
+    "duckduckgo": {
+      "type": "local",
+      "enabled": false,
+      "command": [
+        "docker",
+        "run",
+        "-i",
+        "--rm",
+        "ashdev/duckduckgo-mcp-server"
+      ]
+    },
+    // Servidor MCP de Jira/Confluence. Corre en OTRA MAQUINA (`amaris`), no en
+    // esta — por eso `http://localhost:9001/mcp` fallaba con
+    // "SSE error: Unable to connect": aqui no hay nada escuchando en el 9001.
+    //
+    // `amaris` es un host de Tailscale, igual que `pcgamer`. Localizado
+    // escaneando el 9001 en todos los hosts de `tailscale status`: solo amaris
+    // contesta (405 a un GET, que es lo que responde un endpoint MCP), y el
+    // handshake devuelve:  serverInfo {"name":"mcp-jira","version":"2.0.0"}.
+    //
+    // Expone **12 herramientas**, no 6. Sacadas del registro real del
+    // servidor, `mcp-jira/mcp/src/mcp/factory.ts`, que las importa una a una:
+    //
+    //   jira-search              jira-ticket-details      jira-create-ticket
+    //   jira-update-ticket       jira-transition-ticket   jira-add-comment
+    //   jira-create-meta         confluence-search        confluence-read
+    //   confluence-write         confluence-create-page   confluence-database-rows
+    //
+    // Historia de este comentario, que es el aviso de verdad: decia 5, luego
+    // 6, y las dos veces se habia quedado corto. Un `tools/list` fotografia el
+    // servidor de ESE dia; el servidor sigue creciendo y el comentario no.
+    // Antes de fiarte de esta lista, mirala tu:
+    //     opencode mcp list           (o `make mcp`)
+    //   o la fuente:  mcp-jira/mcp/src/mcp/tools/
+    //
+    // La que usa la skill `jira-ticket` en su PASO 3 es `jira-create-ticket`
+    // (projectKey*, summary*, description, issuetype, priority, assignee,
+    // labels — verificado en el `inputSchema` de jira-create-ticket.ts), y
+    // solo cuando el usuario lo confirma: primero deja el ticket en un fichero
+    // `ticket-<algo>.md` para que lo leas tu.
+    //
+    // OJO AL NOMBRE. Arriba estan los nombres tal y como los registra el
+    // SERVIDOR. En tu lista de herramientas los veras con el prefijo del
+    // servidor MCP delante: `jiraAdmin_jira-create-ticket`. Son la misma
+    // herramienta; el prefijo lo pone opencode, no forma parte del nombre.
+    //
+    // Si vuelve a fallar: `make mcp` hace ping real, y
+    //   curl -s -o /dev/null -w '%{http_code}' http://amaris:9001/mcp
+    // debe dar 405 (no 000). Si da 000, el server esta caido o amaris no esta
+    // en la VPN.
+    "jiraAdmin": {
+      "type": "remote",
+      "enabled": true,
+      // localhost A PROPOSITO: opencode se usa normalmente EN la misma maquina
+      // donde corre el servidor MCP de Jira, y ahi `localhost` es lo correcto
+      // (comprobado: alli sale `✓ jiraAdmin connected`).
+      //
+      // Efecto secundario: desde OTRA maquina este servidor saldra
+      // `✗ failed — SSE error: Unable to connect`, porque aqui no hay nada
+      // escuchando en el 9001. No es un fallo de config, es que el servidor
+      // esta en otro sitio. Dos formas de trabajar desde fuera:
+      //   1) tunel:  ssh -L 9001:localhost:9001 <maquina>   (y localhost sigue valiendo)
+      //   2) apuntar a la maquina por su nombre de Tailscale, p.ej.
+      //      "url": "http://amaris:9001/mcp"   (verificado: devuelve 200)
+      "url": "http://localhost:9001/mcp"
+    }
+  }
+}

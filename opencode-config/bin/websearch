@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Mismo caso que `bin/webfetch`: `websearch` es el nombre de una herramienta que
+# en esta instalacion NO existe (solo aparece con OPENCODE_ENABLE_EXA=1). Si el
+# modelo la escribe en bash, que busque de verdad en vez de dar 127.
+if [ $# -lt 1 ]; then
+  echo "uso: websearch <consulta>   (alias de: web.sh search <consulta>)" >&2
+  exit 1
+fi
+exec "$(dirname "$0")/web.sh" search "$@"

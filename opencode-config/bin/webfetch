@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────
+# webfetch — puente entre una alucinacion y algo que funciona.
+#
+# `webfetch` es una HERRAMIENTA de opencode, no un comando. Pero el modelo la
+# escribe en bash igualmente. Visto en el log, con qwen3.5-9b-mtp:
+#
+#   $ webfetch "https://raw.githubusercontent.com/.../changelog.mdx" 2>/dev/null \
+#       | grep -i "optional" | head -10
+#
+# Como `webfetch` no existia, bash devolvia "command not found" — silenciado por
+# el propio `2>/dev/null` del modelo — y el grep daba vacio. El modelo leia
+# "sin resultados", reformulaba... identico. **229 pasos** repitiendo lo mismo
+# antes de que lo matara a mano (log: step=227,228,229...).
+#
+# Se puede discutir si esto tapa el error del modelo. Lo que no se discute es el
+# resultado: con esto la primera llamada devuelve la pagina y el bucle no existe.
+# El aviso del final le dice el nombre bueno para la proxima.
+# ─────────────────────────────────────────────────────────────────────────
+if [ $# -lt 1 ]; then
+  echo "uso: webfetch <url>   (alias de: web.sh read <url>)" >&2
+  exit 1
+fi
+exec "$(dirname "$0")/web.sh" read "$1"
