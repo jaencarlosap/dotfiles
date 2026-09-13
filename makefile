@@ -3,9 +3,11 @@
 
 # The shell scripts live in older_scripts/ as a fallback during the migration
 # to dtool. They will be removed once dtool is verified.
+# Idempotent: installs Xcode CLT / Homebrew / neovim + deps only if missing,
+# links ~/.config/nvim to nvim-config/ and restores the pinned plugins.
+# YES=1 skips the confirmation prompts (e.g. installing Homebrew).
 install_nvim:
-	@echo "Installing Neovim..."
-	@bash older_scripts/setup_nvim.sh
+	@YES="$(YES)" bash older_scripts/setup_nvim.sh
 
 clean_system:
 	@bash older_scripts/clean_system.sh
