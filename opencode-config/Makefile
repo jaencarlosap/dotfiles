@@ -107,7 +107,7 @@ test-conn:
 init-agents:
 	@bash "$(REPO_DIR)/bin/init-agents.sh" "$(if $(DIR),$(DIR),$(CURDIR))"
 
-## clis: Instala los CLIs que el agente usa por bash (acli = Jira/Confluence, ntn = Notion)
+## clis: Instala los CLIs que el agente usa por bash (acli = Jira/Confluence, ntn = Notion, gh = GitHub)
 .PHONY: clis
 clis:
 	@# Por que CLIs y no MCP: un MCP mete su esquema en CADA turno (Notion: 4370
@@ -132,7 +132,16 @@ clis:
 	else \
 		echo "  ❌ falta npm (Node 22+): instala ntn a mano -> https://developers.notion.com/cli/get-started/installation"; \
 	fi
+	@if command -v gh >/dev/null 2>&1; then \
+		echo "  ✅ gh $$(gh --version 2>/dev/null | head -1 | awk '{print $$3}') ya instalado"; \
+	elif command -v brew >/dev/null 2>&1; then \
+		echo "  instalando gh (GitHub CLI) con Homebrew..."; \
+		brew install gh && echo "  ✅ gh instalado"; \
+	else \
+		echo "  ❌ falta Homebrew: instala gh a mano -> https://cli.github.com"; \
+	fi
 	@echo "  Autenticacion (una vez, abre el navegador):"
+	@gh auth status >/dev/null 2>&1 && echo "    ✅ gh: GitHub autenticado" || echo "    ○ gh: pendiente ->  gh auth login"
 	@acli jira auth status >/dev/null 2>&1 && echo "    ✅ acli: Jira autenticado" || echo "    ○ acli: pendiente ->  acli jira auth login --web"
 	@ntn doctor </dev/null 2>&1 | grep -q "Public API authenticated" && echo "    ✅ ntn: Notion autenticado" || echo "    ○ ntn: pendiente ->  ntn login"
 

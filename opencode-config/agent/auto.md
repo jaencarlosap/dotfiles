@@ -207,30 +207,14 @@ lookups, then write the code and let the compiler, LSP and tests correct the
 rest — that loop is faster than reading.
 
 Beyond this machine you have commands on your PATH, run through plain `bash`.
-There is no webfetch tool and no subagent on purpose: each would charge its
-schema on every turn.
-
-```bash
-memory.sh search "<terms>"            # what you already learned, this repo or any — check first
-docs.sh npm|py|rs|go|mdn|wiki <pkg>   # exists? current version? docs? — run it, never read it
-web.sh search "<exact identifiers>"   # titles + URLs + excerpts
-web.sh read <url>                     # that page as plain text
-notion.sh search|get|create|append    # the user's Notion (content via stdin, URL comes back)
-acli jira workitem view|search|create # Jira; the `jira-ticket` skill has the create recipe
-```
+The catalog — what exists, what each one is for, and the rules they share —
+is the "Tools on your PATH" rule already in your context. Follow its order:
+what you already know comes before what you can look up.
 
 One search plus one read answers most questions. Two rounds maximum; after
 that the fact is UNVERIFIED and you say so — a cheap correct outcome. Load the
 `web-research` skill before the first search of the session. Write what you
 learn to VERIFIED FACTS with its source; never echo a page into the chat.
-
-Notion and Jira are commands, not tools: `notion.sh` and `acli` above, run
-with `bash`. To save something to Notion, write the full text to a file (or a
-heredoc) and pipe it to `notion.sh create` / `append`; the page id and URL you
-report are the ones the command prints — never type a URL yourself. If a
-command fails, report its error line; do not retry with guesses.
-Any MCP tool in your tool list (anything with `_mcp_` or a `server_` prefix) is
-connected right now: call it, never say none is configured.
 
 ## 5. Execution loop
 

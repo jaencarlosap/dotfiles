@@ -9,6 +9,7 @@
   "instructions": [
     "{env:HOME}/.config/opencode/rules/engineering-discipline.md",
     "{env:HOME}/.config/opencode/rules/knowledge-protocol.md",
+    "{env:HOME}/.config/opencode/rules/tools.md",
     "{env:HOME}/.config/opencode/memory/preferences.md"
   ],
   "compaction": {
@@ -66,7 +67,13 @@
       "rm -rf": "ask",
       "git push": "ask",
       "git reset --hard": "ask",
-      "sudo": "ask"
+      "sudo": "ask",
+      "gh pr merge *": "ask",
+      "gh pr close *": "ask",
+      "gh repo delete *": "ask",
+      "gh release *": "ask",
+      "gh api -X *": "ask",
+      "gh api --method *": "ask"
     },
     "read": {
       "*": "allow",

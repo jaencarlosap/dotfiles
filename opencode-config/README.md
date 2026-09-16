@@ -25,7 +25,7 @@ El repo es la **fuente de verdad**. `make install` reemplaza los archivos en
 
 ```bash
 make install       # crea los symlinks (respalda lo previo) + instala acli y ntn si faltan
-make clis          # solo los CLIs (acli = Jira, ntn = Notion) y su estado de autenticacion
+make clis          # solo los CLIs (acli = Jira, ntn = Notion, gh = GitHub) y su estado de autenticacion
 make status        # ver estado de los symlinks
 make test-conn     # ping al server de modelos en pcgamer
 make models        # lista modelos disponibles
@@ -46,6 +46,7 @@ make restore       # restaura el ultimo respaldo
 | `agent/auto.md`          | Agente primario de coding (`qwen-35b`)                     |
 | `rules/engineering-discipline.md` | Reglas anti-slop inyectadas en **todos** los agentes |
 | `rules/knowledge-protocol.md` | Anti-alucinacion: mirar antes de escribir, con presupuesto |
+| `rules/tools.md`         | Catalogo de comandos por bash (memory/docs/web/notion.sh, acli, gh) y sus reglas; en `instructions`, fuera de `auto.md` |
 | `command/*.md`           | Comandos: `/verify`, `/fix`, `/pr`, `/review`              |
 | `plugin/verify-on-edit.ts` | Chequeo de compilación/lint tras cada edición            |
 | `plugin/anti-slop-guard.ts` | **Impide** (no "pide") crear duplicados y ficheros de relleno |
@@ -112,6 +113,17 @@ lista, deja el ticket en fichero y no lo sube (ya lo contemplaba).
   `tui.json`; su plugin usa globales de Bun y exporta una factory con nombre,
   asi que los tests de carga de `test/plugins.mjs` lo rechazarian.
 
+## 🧰 `rules/tools.md`: el catalogo de comandos sale de `auto.md` — 2026-09-16
+
+El §4 de `auto.md` llevaba la lista de comandos por bash (`memory.sh`, `docs.sh`,
+`web.sh`, `notion.sh`, `acli`, `gh`) y sus reglas de uso. Eso es configuracion
+de herramientas, no personalidad del agente, y cada CLI nuevo obligaba a tocar
+el prompt. Ahora vive en `rules/tools.md`, cargado por `instructions` en
+`opencode.jsonc` (como `engineering-discipline` y `knowledge-protocol`), y
+`auto.md` solo lo referencia. Efecto: `auto` paga lo mismo (el texto se movio,
+no se duplico); `build`/`plan` lo reciben tambien (~250 tok), lo cual es
+correcto: esos comandos existen para cualquier agente.
+
 ## 🔌 Sin MCPs: Jira y Notion por CLI — 2026-09-15
 
 Estado final tras dos dias de medir: **`mcp: {}`**. Todo lo externo va por
@@ -124,9 +136,14 @@ Estado final tras dos dias de medir: **`mcp: {}`**. Todo lo externo va por
 | Notion, escribir | subagente `notion-writer` via `task` (**781 tok/turno** en `auto`) + `plugin/task-verify.ts` | **`notion.sh create\|append\|replace`**, contenido por stdin; el id y la URL los imprime el comando |
 | Atlassian Rovo MCP | evaluado: 18 tools primarias + `discover`/`execute*`, ~167 en total, coste sin medir (sin acceso para el OAuth) | descartado antes de medir: `acli` hace lo mismo sin esquema |
 
-`make clis` instala los dos (`brew tap atlassian/homebrew-acli && brew trust
-atlassian/acli && brew install acli`; `npm i -g ntn`) y dice que autenticacion
-falta (`acli jira auth login --web`, `ntn login`). `make install` lo llama.
+`make clis` instala los tres CLIs (`brew tap atlassian/homebrew-acli && brew trust
+atlassian/acli && brew install acli`; `npm i -g ntn`; `brew install gh`) y dice que
+autenticacion falta (`acli jira auth login --web`, `ntn login`, `gh auth login`).
+`make install` lo llama. `gh` ya lo usaban `/pr` (`gh pr create`) y la skill
+`review-changes` (`gh pr diff`); ahora ademas esta en el §4 de `auto.md` para
+lectura (pr view/diff/checks, issue, run) y las acciones que publican o borran
+(`gh pr merge`, `gh pr close`, `gh repo delete`, `gh release *`, `gh api -X`)
+piden confirmacion como `git push`.
 
 Por que gana el CLI aqui, mas alla de los tokens: **la prueba de que algo se
 hizo es la salida del comando.** El subagente de ayer dijo `CREATED: <url>` sin
