@@ -17,8 +17,12 @@ degrades a local model. Keep identifiers verbatim: log `type` values, container
 names and commands are not translated.
 
 This is the ONLY config file for the project. The state of the current task
-lives in `.agent/progress.md` (gitignored), which is a different thing. Do not
-create `.agents/`, `.opencode/progress.md` or `NOTES.md`: the guard blocks them.
+lives in `.agent/progress.md` (gitignored), and facts the agent learned about
+this repo accumulate in `.agent/memory.md` (gitignored, written by
+`memory.sh`) — both are different things from this file. When a line in
+`.agent/memory.md` proves stable, promote it here by hand: this file is
+committed and travels with the repo; that one does not. Do not create
+`.agents/`, `.opencode/progress.md` or `NOTES.md`: the guard blocks them.
 
 ## What goes here (and what does not)
 

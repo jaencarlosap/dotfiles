@@ -14,9 +14,9 @@ un servidor local de modelos en `pcgamer` (vía Tailscale, 12GB VRAM).
 > ```
 >
 > Lo que más cambia en la práctica: un id de modelo que no existe devuelve
-> **404**, no un fallback silencioso. La clave del provider sigue llamándose
-> `lmstudio` en `opencode.jsonc` por no tocar todas las referencias
-> `lmstudio/...`; es un nombre heredado.
+> **404**, no un fallback silencioso. La clave del provider en `opencode.jsonc`
+> es `local` (se llamó `lmstudio` hasta 2026-09-15; los ids son `local/qwen-35b`,
+> `local/qwen-9b`, `local/gpt-oss-20b`).
 
 El repo es la **fuente de verdad**. `make install` reemplaza los archivos en
 `~/.config/opencode` por *symlinks* hacia este repo.
@@ -24,7 +24,8 @@ El repo es la **fuente de verdad**. `make install` reemplaza los archivos en
 ## Uso
 
 ```bash
-make install       # crea los symlinks (respalda lo previo)
+make install       # crea los symlinks (respalda lo previo) + instala acli y ntn si faltan
+make clis          # solo los CLIs (acli = Jira, ntn = Notion) y su estado de autenticacion
 make status        # ver estado de los symlinks
 make test-conn     # ping al server de modelos en pcgamer
 make models        # lista modelos disponibles
@@ -51,9 +52,13 @@ make restore       # restaura el ultimo respaldo
 | `plugin/ground-truth.ts` | Inyecta el estado real del repo en cada turno              |
 | `plugin/slim-tools.ts`   | Recorta `bash`, quita reglas de codigo a agentes NON-CODING, PATH |
 | `plugin/ticket-format.ts`| Renumera las secciones del ticket de Jira                  |
+| `plugin/sampling.ts`     | temperature/top_p solo para el provider local; con otras APIs no se manda nada (GPT rechaza `top_p`) |
 | `test/plugins.mjs`       | Tests de ambos (`make test-plugins`). Fuera de `plugin/` a proposito: opencode carga como plugin lo que hay ahi dentro. |
 | `bin/docs.sh`            | Consulta de paquetes (npm/PyPI/crates/go/MDN/wiki)         |
 | `bin/web.sh`             | Busqueda web (`search`) y lectura de una pagina (`read`)   |
+| `bin/memory.sh`          | Memoria en ficheros: `save` / `promote` / `search` / `show` (repo y global) |
+| `bin/notion.sh`          | Notion por bash sobre el CLI oficial `ntn`: `search` / `get` / `create` / `append` / `replace` |
+| `memory/`                | Memoria GLOBAL versionada: `preferences.md` (siempre en contexto) y `topics/*.md` (bajo demanda) |
 | `bin/webfetch`, `bin/websearch` | Alias de shell para dos nombres de HERRAMIENTA que el modelo escribe en bash |
 | `skill/review-changes/`  | Skill: auditar un diff — verificar lo que afirma y que se quedo sin actualizar |
 | `skill/stop-and-verify/` | Skill: cuando PARAR porque no lo sabes, y que cuenta como prueba |
@@ -71,6 +76,200 @@ make restore       # restaura el ultimo respaldo
 | `templates/AGENTS.md`    | Plantilla de contexto por-proyecto (`make init-agents`)    |
 | `bin/init-agents.sh`     | Genera un `AGENTS.md` con los comandos ya detectados       |
 
+## 🧠 [SUPERADO el 2026-09-15: ya no hay MCPs, ver arriba] MCP actual: `notion` (documentos). Engram se probo y se quito — 2026-09-14
+
+`opencode.jsonc` quedo **sin comentarios** (de 670 a ~160 lineas; el JSON es el
+mismo). Los MCP `duckduckgo` (roto, apagado) y `jiraAdmin` se quitaron. La
+busqueda web no dependia de ninguno: sigue siendo `web.sh` + `docs.sh` por bash.
+La skill `jira-ticket` se queda: si `jiraAdmin_jira-create-ticket` no esta en la
+lista, deja el ticket en fichero y no lo sube (ya lo contemplaba).
+
+- **`notion`** — MCP oficial remoto `https://mcp.notion.com/mcp` con OAuth
+  (`opencode mcp auth notion`; token en `~/.local/share/opencode/mcp-auth.json`).
+  El acceso es el del usuario que autoriza: lo que puedes ver en Notion, lo ve
+  el agente. **Expone 43 tools = ~61k tokens de esquema** (`query-data-sources`
+  sola: ~21k), y `notion-create-comment` tiene un esquema que llama.cpp no puede
+  convertir a gramatica: con ella en la lista, TODA peticion falla con
+  `Failed to initialize samplers: failed to parse grammar`. Por eso en
+  `permission` hay una **allowlist**: `notion_*: deny` y solo `search`, `fetch` y
+  los `list-*-pages` en `allow` (medido: 4370 tok/turno). Escribir paginas cuesta
+  `create-pages` 3971 + `update-page` 4621 tok mas por turno: `auto` no las lleva;
+  las lleva el subagente `notion-writer` (seccion siguiente). `deny` SI quita la
+  tool del esquema (verificado: sin error de gramatica y el modelo solo lista las
+  permitidas).
+- **Engram** ([Gentleman-Programming/engram](https://github.com/Gentleman-Programming/engram))
+  se instalo, se midio y se quito el mismo dia. Funcionaba (18 tools
+  `engram_mem_*` visibles, `engram serve` auto-arrancado por su plugin), pero
+  costaba **4724 tok/turno de esquemas + ~900 del "Memory Protocol"** que inyecta
+  en cada turno, y ese protocolo es imperativo (`mem_save` tras cada decision,
+  `mem_session_summary` antes de cerrar): con qwen-35b son turnos de ceremonia,
+  justo lo que `auto` recorto frente a `build`. Lo que aporta de verdad —buscar
+  decisiones de otros proyectos meses despues— no compensa aqui: la memoria de
+  trabajo ya la cubren `.agent/progress.md` + el prompt de compactacion, y la de
+  largo plazo este README y los `AGENTS.md` por proyecto. Ojo si se retoma:
+  `engram setup opencode` reescribe `opencode.jsonc` (sin comentarios, claves
+  ordenadas), copia el plugin a `~/.config/opencode/plugins/` y crea un
+  `tui.json`; su plugin usa globales de Bun y exporta una factory con nombre,
+  asi que los tests de carga de `test/plugins.mjs` lo rechazarian.
+
+## 🔌 Sin MCPs: Jira y Notion por CLI — 2026-09-15
+
+Estado final tras dos dias de medir: **`mcp: {}`**. Todo lo externo va por
+`bash`, a 0 tokens de esquema hasta que se usa, como `web.sh`:
+
+| que | antes | ahora |
+| --- | --- | --- |
+| Jira | MCP `jiraAdmin` (servidor propio en otra maquina) | **`acli`** (CLI oficial de Atlassian): `acli jira workitem view\|search\|create`. La skill `jira-ticket` crea con `--description-file` |
+| Notion, leer | MCP oficial, allowlist de 6 tools: **4370 tok/turno** | **`notion.sh search\|get`** sobre `ntn` (CLI oficial, beta) |
+| Notion, escribir | subagente `notion-writer` via `task` (**781 tok/turno** en `auto`) + `plugin/task-verify.ts` | **`notion.sh create\|append\|replace`**, contenido por stdin; el id y la URL los imprime el comando |
+| Atlassian Rovo MCP | evaluado: 18 tools primarias + `discover`/`execute*`, ~167 en total, coste sin medir (sin acceso para el OAuth) | descartado antes de medir: `acli` hace lo mismo sin esquema |
+
+`make clis` instala los dos (`brew tap atlassian/homebrew-acli && brew trust
+atlassian/acli && brew install acli`; `npm i -g ntn`) y dice que autenticacion
+falta (`acli jira auth login --web`, `ntn login`). `make install` lo llama.
+
+Por que gana el CLI aqui, mas alla de los tokens: **la prueba de que algo se
+hizo es la salida del comando.** El subagente de ayer dijo `CREATED: <url>` sin
+llamar a ninguna tool y hubo que escribir un verificador; `notion.sh create`
+imprime el id que devuelve la API o falla con el error de `ntn`, y no hay
+informe que inventar. Se quitaron `agent/notion-writer.md`,
+`plugin/task-verify.ts` (con sus 6 tests), la entrada `notion` del jsonc y sus
+permisos, y `task` vuelve a `deny` en `auto`. `notion.sh` esta probado de punta
+a punta (search, create, append, get por URL, errores).
+
+Dos cosas aprendidas con `ntn`:
+
+- **Se queda esperando un body por stdin** cuando stdin no es TTY — que desde
+  el agente es siempre. Cada llamada del wrapper lleva `< /dev/null`; sin eso
+  el primer `notion.sh search` colgo 3 minutos.
+- `ntn login` es OAuth de usuario: el agente ve lo que ve el usuario, igual que
+  con el MCP. Lo unico que se pierde frente al MCP es la busqueda "AI" de
+  Notion; `ntn api v1/search` es la busqueda normal de la API.
+
+Con `acli` queda una cosa sin verificar por falta de acceso a Jira desde esta
+maquina: que el markup `h3.` del ticket renderice bien via
+`--description-file`. La skill lo dice: comprobarlo en el primer ticket.
+
+## 🎛️ `top_p` rompia `auto` con otras APIs — 2026-09-15
+
+Al cambiar el modelo de `auto` en la TUI a un GPT de razonamiento:
+
+    Unsupported parameter: 'top_p' is not supported with this model.
+
+`agent/auto.md` llevaba `temperature: 0.6` y `top_p: 0.95` en el frontmatter,
+y eso se manda con CUALQUIER modelo que use el agente. Los GPT-5.x rechazan
+`top_p` (varios tambien `temperature`), asi que un agente pensado para ser
+"auto" solo funcionaba con qwen. Arreglo: el sampling sale de los agentes
+(`auto`, `notion-writer`) y entra en `plugin/sampling.ts`, un `chat.params`
+que aplica los valores SOLO cuando `model.providerID` es `local`; con
+cualquier otro provider no toca nada y la API usa sus defaults. Verificado con
+el proxy: la peticion a llama.cpp sigue llevando `temperature=0.6, top_p=0.95`.
+Los valores siguen sin medir para qwen-35b (pendiente desde antes).
+
+## ✍️ [SUPERADO el 2026-09-15 por `notion.sh`, ver arriba] Escribir en Notion sin pagarlo en cada turno: el subagente `notion-writer` — 2026-09-14
+
+El usuario no queria cambiar de agente a mano para escribir en Notion. Lo que
+opencode ofrece para "cambia y vuelve" es `task`: `auto` delega en un
+**subagente** que corre en su propia sesion con sus propias tools y devuelve
+una linea. Asi quedo:
+
+| | `auto` | `notion-writer` (mode: subagent) |
+| --- | --- | --- |
+| `create-pages` / `update-page` | **no** (`agent.auto.permission: deny`) | si |
+| `search` / `fetch` / `list-*` | si | si |
+| `bash`, `edit`, `write`, `glob`, `grep` | si | **no** |
+| coste por turno | `task` = **781 tok** (medido, `tokens.input` de dos sesiones reales) | +8395 de las dos tools, solo mientras vive |
+
+Como esta configurado, y por que asi:
+
+- Las tools de escritura estan en **`allow` global** y en **`deny` por agente**
+  en `auto`, `build` y `plan`. Al reves (deny global, allow en el subagente) NO
+  funciona: capturado con un proxy delante de llama.cpp, un `allow` por agente
+  no anade una tool MCP que la config global niega; un `deny` por agente si la
+  quita. Eso era lo que habia que saber y `opencode agent list` no lo dice —
+  ahi la fusion de reglas sale bien y luego la peticion real no la respeta.
+- `task` en `auto` es `{"*": deny, "notion-writer": ask}`: el `ask` te ensena
+  el prompt completo (titulo + contenido) antes de que llegue a tu Notion, y es
+  la unica confirmacion; dentro del subagente las tools van en `allow`.
+- Sin destino, el subagente usa `creation_mode: "draft"` (pagina privada a
+  nivel de workspace) y lo dice. No busca destinos que nadie nombro.
+- `explore` y `general` siguen deshabilitados, asi que la lista del tool `task`
+  solo lleva a `notion-writer` (por eso son 781 y no mas).
+
+Dos trampas que se comieron una tarde:
+
+1. **`opencode run --agent notion-writer` no ejecuta el subagente**: cae al
+   primario por defecto sin avisar. Las "pruebas del subagente" hechas asi
+   estaban probando `auto`. La prueba valida es la real: `auto` -> `task`.
+2. **El subagente dijo `CREATED: … https://www.notion.so/…` sin llamar a
+   ninguna tool.** Razono "debo usar creation_mode draft" y en el mismo paso
+   escribio el informe con una URL inventada (116 tokens, cero tool parts en
+   la sesion hija, comprobado en `opencode.db`). `auto` lo reporto como hecho.
+   La pagina no existia. Respuesta: `plugin/task-verify.ts` — en
+   `tool.execute.after` de `task` lee la sesion hija por la API y, si no hay
+   una llamada COMPLETADA a `create-pages`/`update-page`, sustituye el
+   resultado por `NOT WRITTEN` y explica que la URL es inventada; si la hubo
+   pero la URL reportada no aparece en la salida de la tool, lo marca. Con el
+   prompt endurecido ("paso 1 llama a la tool; la URL se copia de su salida")
+   y el verificador activo, la segunda prueba creo la pagina de verdad
+   (`opencode subagent test 2`, contenido verbatim, verificado con
+   `notion-fetch` fuera de opencode).
+
+Pendiente de medir en uso real: si `auto` le pasa al subagente el texto
+completo o un resumen cuando el contenido es largo (el prompt lo exige y el
+subagente se niega si huele a resumen, pero no esta probado con textos largos).
+
+## 🧠 Memoria del agente con lo que ya habia — 2026-09-14
+
+Tras quitar engram (5,6k tok/turno), la pregunta era que faltaba de verdad. La
+respuesta estaba en `stremio-iptv-addon/.agent/`: dos `done-*.md` con hechos
+que costaron sesiones ("Sanctum pide `/sanctum/csrf-cookie` ANTES del POST",
+"embed69.org esta en NO_RESUELVEN: PoW anti-bot, ~70s y falla igual") y que
+**nada volvia a leer**. El "carry over" de VERIFIED FACTS al archivar dependia
+de que el modelo se acordara justo en ese momento, y no se acordo. La memoria
+de trabajo estaba resuelta; la fuga era entre tareas.
+
+Cuatro piezas, 0 tokens de esquema (todo por `bash`, como `web.sh`):
+
+| pieza | que es | cuando se lee | coste medido (tokenizador de qwen-35b) |
+| --- | --- | --- | --- |
+| `memory/preferences.md` | reglas de como trabajar, globales, **versionadas** | cada turno, via `instructions` | 73 tok con 2 reglas; tope duro de 20 lineas |
+| `memory/topics/<tema>.md` | hechos de una herramienta/servicio (llama-swap, notion...) | bajo demanda: `memory.sh search` / `show` | 39 tok de indice, una vez por sesion |
+| `.agent/memory.md` (gitignored) | hechos de ESTE repo que sobreviven a la tarea | cada turno, `ground-truth` lo inyecta como `<repo-memory>` | ~500 tok con el tope (30 lineas / 2000 chars); 25 hechos reales de stremio sin recortar = 954 |
+| tarea sin terminar | GOAL + NEXT STEP de `.agent/progress.md` si NEXT STEP no dice "done" | primer turno de la sesion | 137 tok, una vez |
+
+Como se escribe: `memory.sh save --pref "<regla>"` cuando el usuario enuncia
+una REGLA (siempre/nunca/de ahora en adelante), `memory.sh save --topic <tema>
+"<hecho> — source: ..."` para lo que no es de un repo, `memory.sh save "<hecho>"`
+para el repo, y `memory.sh promote` al archivar un progress (en `auto.md` va en
+el mismo comando que el `mv`; `--from-done` migra los `done-*.md` que ya
+existen). Todo es append con dedup por linea y tope; **el guard bloquea
+`write`/`edit` sobre estos ficheros** y da el comando bueno — un `write`
+reescribe el fichero entero, y con un modelo pequeno eso es perder 20 hechos
+para "anadir" uno.
+
+Como se lee: `memory.sh search "<terminos>"` es el **peldano 0** de la escalera
+del knowledge-protocol y de la puerta de contexto, antes de grep en el repo.
+Verificado en sesion real: preguntado por llama-swap, el modelo llamo a
+`memory.sh search "llama-swap"` sin que se lo pidieran y cito la linea.
+`~/.config/opencode/memory/**` esta en `external_directory: allow` porque el
+primer intento fue `cat ~/.config/opencode/memory/preferences.md` y el permiso
+lo tumbo (turno perdido).
+
+Por que `preferences.md` va en `instructions` y no lo inyecta el plugin: una
+preferencia tiene que estar SIEMPRE delante — el modelo no sabe que debe
+consultar "¿el usuario prefiere X?" antes de actuar. Los hechos, en cambio, solo
+importan cuando choca con esa incognita, y ahi ya tiene el disparador (la
+escalera). Y por que esta en el repo de dotfiles: lo que el modelo aprende sale
+en `git status`; lo estable lo subes tu a `rules/` o al `AGENTS.md` del
+proyecto, el ruido lo borras. El humano sigue decidiendo que se vuelve regla.
+
+Lo que NO hace, a proposito: resumen obligatorio por sesion ni "guarda tras
+cada bugfix" (la ceremonia de engram), ni memoria de un repo en otro repo
+(`.agent/memory.md` es local y gitignored; lo del proyecto que merece viajar es
+`AGENTS.md`). `memory.sh pending` (tareas a medias en todos los repos) se dejo
+fuera hasta ver si hace falta.
+
 ## ⚖️ `auto` vs `build`: medir antes de asumir que el de serie es mejor
 
 La sospecha (2026-09-11) era que el agente `build` de opencode funcionaba mejor
@@ -81,8 +280,8 @@ tareas del bench, `build` contra el `auto` de entonces. Para eso
 del prompt) y `out` (output + reasoning de la sesión):
 
 ```bash
-make bench-models MODEL=lmstudio/qwen-35b TAG=build AGENT=build
-make bench-models MODEL=lmstudio/qwen-35b TAG=auto  AGENT=auto
+make bench-models MODEL=local/qwen-35b TAG=build AGENT=build
+make bench-models MODEL=local/qwen-35b TAG=auto  AGENT=auto
 ```
 
 ### Qué es `build` para este modelo, exactamente
@@ -1495,8 +1694,8 @@ opencode run "Without using any tools: do your system instructions contain a sec
 > ⚠️ **El backend ya no es LM Studio: es llama-swap delante de llama.cpp**, en
 > el mismo `http://pcgamer:1234`. Se comprueba en un segundo:
 > `curl -s http://pcgamer:1234/v1/models | grep owned_by` → `"llama-swap"`.
-> La clave del provider en `opencode.jsonc` se sigue llamando `lmstudio` para
-> no tocar todas las referencias `lmstudio/...`: es un nombre heredado.
+> La clave del provider en `opencode.jsonc` se llamó `lmstudio` hasta
+> 2026-09-15; ahora es `local` (`local/qwen-35b`, etc.).
 
 Los ids son los de la config de llama-swap, **no** rutas de HuggingFace.
 `make models` los lista y además los contrasta con lo declarado:

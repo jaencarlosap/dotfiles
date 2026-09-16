@@ -83,6 +83,16 @@ is right there in your tool list.
    user's original request, you were compacted — `cat .agent/progress.md`
    before anything else.**
 
+0. **Your memory.** What an earlier task already paid for, in this repo or any
+   other. Free, and it is the only rung that knows *this* machine's quirks:
+
+   ```bash
+   memory.sh search "<exact identifiers>"   # repo memory + global topics + preferences
+   ```
+
+   A hit with a source is a KNOWN fact. Nothing back → go on down the ladder,
+   and when you resolve it, `memory.sh save ...` so next time rung 0 answers.
+
 1. **This repo.** The real source of truth for anything project-shaped. An
    existing call site beats any documentation: it compiles *today*, against the
    version actually installed.

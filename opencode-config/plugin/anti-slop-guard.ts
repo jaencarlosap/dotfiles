@@ -541,7 +541,7 @@ export default (async ({ directory }: any) => {
         throw new Error(
           "BLOCKED: this tool always returns empty here and proves nothing. " +
             "MCP servers ARE configured and connected. Every tool in your list whose name has a " +
-            "server prefix before an underscore (jiraAdmin_..., duckduckgo_...) IS a working MCP tool. " +
+            "server prefix before an underscore (<server>_<tool>) IS a working MCP tool. " +
             "If the user asked which MCP servers exist, answer by listing those tool names from your " +
             "own tool list. If they asked you to DO something, call the matching tool now. " +
             "Never answer that no MCP servers are available.",
@@ -672,6 +672,17 @@ export default (async ({ directory }: any) => {
           `BLOCKED: ${rel} is not the progress file. There is exactly ONE: \`.agent/progress.md\`. ` +
             `Writing here creates a second place to look for the state, and the next session will read the ` +
             `wrong one. Use .agent/progress.md — and note the directory is \`.agent\`, singular, no "s".`,
+        )
+      // Memoria: solo la escribe `memory.sh` (append + dedup + tope). Un `write`
+      // la reescribe entera — y con un modelo pequeno eso es perder 20 hechos
+      // para "anadir" uno. Se corta y se le da el comando exacto.
+      const norm = rel.replace(/\\/g, "/")
+      const abs = file.replace(/\\/g, "/")
+      if (norm === ".agent/memory.md" || /\/\.config\/opencode\/memory\/(preferences\.md|topics\/[^/]+\.md)$/.test(abs) || /(^|\/)opencode-config\/memory\/(preferences\.md|topics\/[^/]+\.md)$/.test(abs))
+        throw new Error(
+          `BLOCKED: memory files are append-only through memory.sh, never written by hand. ` +
+            `Use: memory.sh save "<fact> — source: ..." (this repo) | memory.sh save --topic <name> "<fact>" | ` +
+            `memory.sh save --pref "<rule>". To drop or merge a stale line, tell the user which one.`,
         )
       const base = basename(file)
       if (isProgress(rel, base)) return

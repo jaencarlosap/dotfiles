@@ -12,7 +12,7 @@ BACKUP_DIR   := $(REPO_DIR)/.backups
 STAMP        := $(shell date +%Y%m%d-%H%M%S)
 
 # Archivos/carpetas que gestionamos (relativos a TARGET_DIR)
-LINKS        := opencode.jsonc agent rules command plugin bin templates skill
+LINKS        := opencode.jsonc agent rules command plugin bin templates skill memory
 
 # Endpoint del PC con los modelos: llama-swap delante de llama.cpp, via
 # Tailscale. NO es LM Studio (lo fue). Se nota en dos sitios:
@@ -32,9 +32,9 @@ help:
 	@echo "Repo:    $(REPO_DIR)"
 	@echo "Target:  $(TARGET_DIR)"
 
-## install: Crea los symlinks (respalda lo existente primero)
+## install: Crea los symlinks (respalda lo existente primero) e instala los CLIs (acli, ntn)
 .PHONY: install
-install: backup
+install: backup clis
 	@mkdir -p "$(TARGET_DIR)"
 	@for item in $(LINKS); do \
 		src="$(REPO_DIR)/$$item"; \
@@ -107,6 +107,35 @@ test-conn:
 init-agents:
 	@bash "$(REPO_DIR)/bin/init-agents.sh" "$(if $(DIR),$(DIR),$(CURDIR))"
 
+## clis: Instala los CLIs que el agente usa por bash (acli = Jira/Confluence, ntn = Notion)
+.PHONY: clis
+clis:
+	@# Por que CLIs y no MCP: un MCP mete su esquema en CADA turno (Notion: 4370
+	@# tok solo para leer; Atlassian: 18 tools primarias sin medir). Un comando
+	@# por bash cuesta 0 tokens hasta que se usa. Los dos son oficiales y
+	@# autentican con OAuth de usuario: el agente ve lo que tu ves.
+	@if command -v acli >/dev/null 2>&1; then \
+		echo "  ✅ acli $$(acli --version 2>/dev/null | awk '{print $$3}') ya instalado"; \
+	elif command -v brew >/dev/null 2>&1; then \
+		echo "  instalando acli (Atlassian CLI) con Homebrew..."; \
+		brew tap atlassian/homebrew-acli >/dev/null 2>&1 || true; \
+		brew trust atlassian/acli >/dev/null 2>&1 || true; \
+		brew install acli && echo "  ✅ acli instalado"; \
+	else \
+		echo "  ❌ falta Homebrew: instala acli a mano -> https://developer.atlassian.com/cloud/acli/guides/install-macos/"; \
+	fi
+	@if command -v ntn >/dev/null 2>&1; then \
+		echo "  ✅ ntn $$(ntn --version 2>/dev/null | awk '{print $$2}') ya instalado"; \
+	elif command -v npm >/dev/null 2>&1; then \
+		echo "  instalando ntn (Notion CLI) con npm..."; \
+		npm install --global ntn >/dev/null 2>&1 && echo "  ✅ ntn instalado"; \
+	else \
+		echo "  ❌ falta npm (Node 22+): instala ntn a mano -> https://developers.notion.com/cli/get-started/installation"; \
+	fi
+	@echo "  Autenticacion (una vez, abre el navegador):"
+	@acli jira auth status >/dev/null 2>&1 && echo "    ✅ acli: Jira autenticado" || echo "    ○ acli: pendiente ->  acli jira auth login --web"
+	@ntn doctor </dev/null 2>&1 | grep -q "Public API authenticated" && echo "    ✅ ntn: Notion autenticado" || echo "    ○ ntn: pendiente ->  ntn login"
+
 ## mcp: Estado de los servidores MCP (+ chequeo real de conectividad)
 .PHONY: mcp
 mcp:
@@ -127,8 +156,8 @@ bench-models:
 	@if [ -n "$(MODEL)" ]; then \
 		bash "$(REPO_DIR)/bench/run-model.sh" "$(MODEL)" "$(if $(TAG),$(TAG),custom)" "$(AGENT)"; \
 	else \
-		bash "$(REPO_DIR)/bench/run-model.sh" lmstudio/qwen-35b qwen35; \
-		bash "$(REPO_DIR)/bench/run-model.sh" lmstudio/qwen-9b qwen9; \
+		bash "$(REPO_DIR)/bench/run-model.sh" local/qwen-35b qwen35; \
+		bash "$(REPO_DIR)/bench/run-model.sh" local/qwen-9b qwen9; \
 	fi
 	@echo ""
 	@for t in redtest newproj lookup ticket; do \
@@ -156,7 +185,7 @@ r=json.load(sys.stdin).get('running',[]);\
 import re,json;\
 s=open('$(REPO_DIR)/opencode.jsonc').read();\
 s=re.sub(r'^\s*//.*\$$','',s,flags=re.M);\
-c=json.loads(s)['provider']['lmstudio']['models'];\
+c=json.loads(s)['provider']['local']['models'];\
 [print(f\"  declarado: {k:14} context={v['limit']['context']}  output={v['limit']['output']}  -> compacta a los {v['limit']['context']-min(v['limit']['output'],32000)} tokens\") for k,v in c.items()]"
 	@echo "  Regla: context <= -c, y deja ~3k de colchon. Pasarse no da error: trunca."
 
@@ -187,5 +216,5 @@ import sys,json;\
 import re,json;\
 s=re.sub(r'^\s*//.*\$$','',open('$(REPO_DIR)/opencode.jsonc').read(),flags=re.M);\
 d=json.loads(s);\
-print('  declarados en opencode.jsonc:', ', '.join(d['provider']['lmstudio']['models']));\
+print('  declarados en opencode.jsonc:', ', '.join(d['provider']['local']['models']));\
 print('  model =', d['model'], '| small_model =', d['small_model'])"

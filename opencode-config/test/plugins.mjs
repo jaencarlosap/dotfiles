@@ -4,7 +4,7 @@
 // Se ejecutan contra directorios temporales propios, asi que no dependen del
 // cwd (una version anterior si, y dio dos falsos fallos al correrla desde otro
 // sitio: el test leia el README.md del repo real).
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "fs"
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "fs"
 import { tmpdir } from "os"
 import { join, dirname } from "path"
 import { fileURLToPath } from "url"
@@ -346,15 +346,23 @@ const t = async (n, f) => {
       if (m) throw new Error("falso positivo: " + cmd + " -> " + m)
     }
   })
+  await t("bloquea write/edit a los ficheros de memoria y redirige a memory.sh", async () => {
+    for (const f of [".agent/memory.md", `${process.env.HOME}/.config/opencode/memory/preferences.md`, `${process.env.HOME}/.config/opencode/memory/topics/docker.md`]) {
+      const m = await blocks({ filePath: f.startsWith("/") ? f : join(dir, f), content: "x" }, "write")
+      if (!m?.includes("memory.sh save")) throw new Error("no bloqueo " + f + ": " + m)
+    }
+    const ok = await blocks({ filePath: join(dir, ".agent", "progress.md"), content: "x" }, "write")
+    if (ok) throw new Error("bloqueo el progress file: " + ok)
+  })
   await t("bloquea la fontaneria MCP y redirige a las tools reales", async () => {
     for (const tool of ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]) {
       const m = await blocks({}, tool)
       if (!m?.includes("BLOCKED")) throw new Error("no bloqueo " + tool)
-      if (!m.includes("jiraAdmin_")) throw new Error("no redirige a la tool real: " + tool)
+      if (!m.includes("<server>_<tool>")) throw new Error("no redirige a la tool real: " + tool)
     }
   })
   await t("NO bloquea las tools del servidor MCP (esas si sirven)", async () => {
-    for (const tool of ["jiraAdmin_confluence-search", "duckduckgo_search", "jiraAdmin_jira-ticket-details"]) {
+    for (const tool of ["jira_search", "context7_query-docs", "gh_grep_search"]) {
       const m = await blocks({ query: "x" }, tool)
       if (m) throw new Error("bloqueo indebido " + tool + ": " + m)
     }
@@ -443,6 +451,71 @@ const t = async (n, f) => {
     const txt = await run(); delete process.env.OPENCODE_GROUND_OFF
     if (txt !== "do the thing") throw new Error("sigue inyectando")
   })
+  // ── memoria (2026-09-14): repo cada turno, topics + tarea pendiente una vez ──
+  const { mkdirSync } = await import("fs")
+  rmSync(join(dir, ".agent_progress.md"), { force: true })
+  rmSync(join(dir, "nuevo.txt"), { force: true })
+  const gmem = tmp("gmem")
+  process.env.OPENCODE_MEMORY_DIR = gmem
+  // el plugin lee OPENCODE_MEMORY_DIR al importarse: re-importa con query para invalidar la cache
+  const hooks2 = await (await import(join(HERE, "..", "plugin", "ground-truth.ts") + "?mem")).default({ directory: dir })
+  const tf2 = hooks2["experimental.chat.messages.transform"]
+  const run2 = async ({ first = false } = {}) => {
+    const msgs = first
+      ? [{ role: "user", parts: [{ type: "text", text: "do the thing" }] }]
+      : [
+          { role: "user", parts: [{ type: "text", text: "antes" }] },
+          { role: "assistant", parts: [{ type: "text", text: "ok" }] },
+          { role: "user", parts: [{ type: "text", text: "do the thing" }] },
+        ]
+    const o = { messages: msgs }
+    await tf2({}, o)
+    return o.messages[o.messages.length - 1].parts[0].text
+  }
+  await t("inyecta .agent/memory.md en CADA turno, aparte del repo-state", async () => {
+    mkdirSync(join(dir, ".agent"), { recursive: true })
+    writeFileSync(join(dir, ".agent", "memory.md"), "# Repo memory\n\n- sanctum needs csrf-cookie first — source: test_resolver.js\nno es un hecho\n")
+    const txt = await run2()
+    if (!txt.includes("<repo-memory") || !txt.includes("sanctum needs csrf-cookie")) throw new Error("no inyecto la memoria: " + txt)
+    if (txt.includes("no es un hecho")) throw new Error("inyecto lineas que no son hechos")
+    if (txt.includes("<context-gate")) throw new Error("no era el primer turno")
+  })
+  await t("la memoria del repo tiene su propio limite (no desplaza al repo-state)", async () => {
+    writeFileSync(join(dir, ".agent", "memory.md"), Array.from({ length: 200 }, (_, i) => `- fact ${i} bla bla bla bla bla`).join("\n"))
+    writeFileSync(join(dir, "nuevo.txt"), "x")
+    const txt = await run2()
+    if (!txt.includes("nuevo.txt")) throw new Error("perdio el git status")
+    const mem = txt.slice(txt.indexOf("<repo-memory"), txt.indexOf("</repo-memory>"))
+    if (mem.length > 2100) throw new Error(mem.length + " chars de memoria, demasiado")
+    rmSync(join(dir, "nuevo.txt"), { force: true })
+    rmSync(join(dir, ".agent", "memory.md"), { force: true })
+  })
+  await t("primer turno -> indice de topics globales (una linea) y NO su contenido", async () => {
+    mkdirSync(join(gmem, "topics"), { recursive: true })
+    writeFileSync(join(gmem, "topics", "docker.md"), "# docker\n\n- compose v2 is `docker compose` — source: --help\n- otro\n")
+    const txt = await run2({ first: true })
+    if (!txt.includes("<global-memory") || !txt.includes("docker (2)")) throw new Error("sin indice: " + txt)
+    if (txt.includes("compose v2")) throw new Error("inyecto el contenido del topic")
+    if ((await run2()).includes("<global-memory")) throw new Error("repitio el indice en un turno posterior")
+  })
+  await t("primer turno -> GOAL + NEXT STEP de una tarea sin terminar", async () => {
+    writeFileSync(join(dir, ".agent", "progress.md"), "# GOAL (verbatim — never edit)\n\nadd the /health endpoint\n\n# FILES DONE\n- a.go\n\n# VERIFIED FACTS\n- f — source: x\n\n# NEXT STEP\nwrite the handler test\n")
+    const txt = await run2({ first: true })
+    if (!txt.includes("<unfinished-task") || !txt.includes("add the /health endpoint") || !txt.includes("write the handler test"))
+      throw new Error("no inyecto la tarea pendiente: " + txt)
+    if (txt.includes("a.go")) throw new Error("inyecto mas secciones de la cuenta")
+    if ((await run2()).includes("<unfinished-task")) throw new Error("la repitio en un turno posterior")
+  })
+  await t("tarea terminada (NEXT STEP: done) -> no la reanuda", async () => {
+    writeFileSync(join(dir, ".agent", "progress.md"), "# GOAL\n\nx\n\n# NEXT STEP\nTask complete. Nothing left.\n")
+    if ((await run2({ first: true })).includes("<unfinished-task")) throw new Error("reanudo una tarea terminada")
+    rmSync(join(dir, ".agent"), { recursive: true, force: true })
+  })
+  await t("la puerta nombra memory.sh search como primer peldano", async () => {
+    const txt = await run2({ first: true })
+    if (!/memory\.sh search[^\n]*grep in/.test(txt)) throw new Error("memory.sh no va antes que grep: " + txt)
+  })
+  delete process.env.OPENCODE_MEMORY_DIR
   rmSync(dir, { recursive: true, force: true })
 }
 
@@ -691,6 +764,97 @@ const t = async (n, f) => {
       if (m) { delete process.env.OPENCODE_LOOP_OFF; throw new Error("sigue activo: " + m) }
     }
     delete process.env.OPENCODE_LOOP_OFF
+  })
+}
+
+// ── sampling ─────────────────────────────────────────────────────────────
+{
+  const hooks = await (await import(join(HERE, "..", "plugin", "sampling.ts"))).default({})
+  const params = hooks["chat.params"]
+  const run = async (providerID, agent = "auto") => {
+    const o = { temperature: undefined, topP: undefined, topK: undefined, maxOutputTokens: undefined, options: {} }
+    await params({ agent, model: { id: "x", providerID } }, o)
+    return o
+  }
+  console.log("\nsampling:")
+  await t("local + auto -> 0.6 / 0.95", async () => {
+    const o = await run("local")
+    if (o.temperature !== 0.6 || o.topP !== 0.95) throw new Error(JSON.stringify(o))
+  })
+  await t("otro provider (openai) -> NO manda temperature ni top_p", async () => {
+    // Era el fallo real: "Unsupported parameter: 'top_p' is not supported with this model."
+    for (const p of ["openai", "anthropic", "opencode"]) {
+      const o = await run(p)
+      if (o.temperature !== undefined || o.topP !== undefined) throw new Error(p + ": " + JSON.stringify(o))
+    }
+  })
+  await t("agente sin tabla -> no toca nada ni en local", async () => {
+    const o = await run("local", "build")
+    if (o.temperature !== undefined || o.topP !== undefined) throw new Error(JSON.stringify(o))
+  })
+  await t("OPENCODE_SAMPLING_OFF=1 lo desactiva", async () => {
+    process.env.OPENCODE_SAMPLING_OFF = "1"
+    const o = await run("local"); delete process.env.OPENCODE_SAMPLING_OFF
+    if (o.temperature !== undefined) throw new Error("sigue activo")
+  })
+}
+
+// ── memory.sh ────────────────────────────────────────────────────────────
+{
+  const repo = tmp("memrepo")
+  const gmem = tmp("memglobal")
+  const M = join(HERE, "..", "bin", "memory.sh")
+  const m = (...args) => {
+    try {
+      return { rc: 0, out: execFileSync("bash", [M, ...args], { cwd: repo, encoding: "utf8", env: { ...process.env, OPENCODE_MEMORY_DIR: gmem }, stdio: ["ignore", "pipe", "pipe"] }) }
+    } catch (e) {
+      return { rc: e.status, out: (e.stdout ?? "") + (e.stderr ?? "") }
+    }
+  }
+  console.log("\nmemory.sh:")
+  await t("save (repo) crea .agent/memory.md, lo gitignora y deduplica", async () => {
+    if (m("save", "api base is /v2 — source: curl").rc !== 0) throw new Error("fallo el save")
+    if (!existsSync(join(repo, ".agent", "memory.md"))) throw new Error("no creo el fichero")
+    if (!readFileSync(join(repo, ".gitignore"), "utf8").includes(".agent/")) throw new Error("no gitignoro .agent/")
+    const r = m("save", "api base is /v2 — source: curl")
+    if (r.rc !== 2 || !r.out.includes("already there")) throw new Error("no deduplico: " + r.out)
+    if (readFileSync(join(repo, ".agent", "memory.md"), "utf8").split("- api base").length !== 2) throw new Error("duplico la linea")
+  })
+  await t("save --pref respeta el tope de 20", async () => {
+    for (let i = 0; i < 20; i++) m("save", "--pref", `rule ${i}`)
+    const r = m("save", "--pref", "one too many")
+    if (r.rc !== 3 || !r.out.includes("FULL")) throw new Error("no corto al llegar al tope: " + r.out)
+  })
+  await t("save --topic valida el nombre y escribe en topics/<nombre>.md", async () => {
+    if (m("save", "--topic", "../evil", "x").rc === 0) throw new Error("acepto un nombre con ruta")
+    if (m("save", "--topic", "docker", "compose v2 — source: --help").rc !== 0) throw new Error("fallo el save")
+    if (!existsSync(join(gmem, "topics", "docker.md"))) throw new Error("no creo el topic")
+  })
+  await t("promote saca SOLO los VERIFIED FACTS del progress (y de done-* con --from-done)", async () => {
+    const { mkdirSync } = await import("fs")
+    mkdirSync(join(repo, ".agent"), { recursive: true })
+    writeFileSync(join(repo, ".agent", "progress.md"), "# GOAL\nsecreto\n\n# FILES DONE\n- a.go\n\n# VERIFIED FACTS\n- gin v1.12 — source: docs.sh go\n\n# NEXT STEP\ny\n")
+    writeFileSync(join(repo, ".agent", "done-20260101-0000.md"), "# VERIFIED FACTS\n- old fact — source: done\n")
+    if (m("promote").rc !== 0) throw new Error("fallo promote")
+    let mem = readFileSync(join(repo, ".agent", "memory.md"), "utf8")
+    if (!mem.includes("gin v1.12")) throw new Error("no promovio el fact")
+    if (mem.includes("secreto") || mem.includes("a.go")) throw new Error("promovio otras secciones")
+    if (mem.includes("old fact")) throw new Error("leyo done-* sin --from-done")
+    m("promote", "--from-done")
+    mem = readFileSync(join(repo, ".agent", "memory.md"), "utf8")
+    if (!mem.includes("old fact")) throw new Error("--from-done no leyo los done-*")
+    if (mem.split("gin v1.12").length !== 2) throw new Error("promote duplico")
+  })
+  await t("search busca en global + repo y ordena por terminos que coinciden", async () => {
+    const r = m("search", "gin", "compose")
+    if (r.rc !== 0 || !r.out.includes("gin v1.12") || !r.out.includes("compose v2")) throw new Error("no encontro en los dos ambitos: " + r.out)
+    if (!r.out.includes("memory/topics/docker.md")) throw new Error("no acorta la ruta global")
+    if (!m("search", "zzz-nada").out.includes("no match")) throw new Error("no dice que no hay nada")
+  })
+  await t("index e show <topic>", async () => {
+    if (!m("index").out.includes("docker (1")) throw new Error("index no lista el topic")
+    if (!m("show", "docker").out.includes("compose v2")) throw new Error("show no imprime el topic")
+    if (m("show", "inexistente").rc === 0) throw new Error("show acepto un topic que no existe")
   })
 }
 

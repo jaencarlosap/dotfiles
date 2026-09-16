@@ -15,7 +15,7 @@ Cuatro tareas con correccion OBJETIVA (no "parece buena respuesta"):
 
 ```bash
 make bench-models                                  # qwen-35b y qwen-9b, las 4 tareas
-make bench-models MODEL=lmstudio/gpt-oss-20b TAG=oss   # uno solo
+make bench-models MODEL=local/gpt-oss-20b TAG=oss   # uno solo
 ```
 
 Los ids salen de `make models` (son los de llama-swap, no rutas de
