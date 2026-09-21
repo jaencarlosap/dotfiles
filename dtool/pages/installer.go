@@ -28,6 +28,7 @@ type installerState int
 
 const (
 	installerSelect installerState = iota
+	installerConfirm
 	installerRunning
 	installerDone
 )
@@ -194,6 +195,16 @@ func (m InstallerModel) Update(msg tea.Msg) (InstallerModel, tea.Cmd) {
 		switch m.state {
 		case installerSelect:
 			return m.updateSelect(msg)
+		case installerConfirm:
+			switch msg.String() {
+			case "y", "Y", "enter":
+				m.state = installerRunning
+				return m.runNext()
+			case "n", "N", "esc", "q":
+				m.state = installerSelect
+				m.queue = nil
+			}
+			return m, nil
 		case installerDone:
 			switch msg.String() {
 			case "enter", "r":
@@ -260,8 +271,9 @@ func (m InstallerModel) updateSelect(msg tea.KeyMsg) (InstallerModel, tea.Cmd) {
 		if len(m.queue) == 0 {
 			return m, nil
 		}
-		m.state = installerRunning
-		return m.runNext()
+		// Nunca se ejecuta directo desde la lista: primero se ve que va a
+		// correr y en que orden. Una tecla de mas (o `a` = todo) no dispara nada.
+		m.state = installerConfirm
 	}
 	return m, nil
 }
@@ -349,8 +361,17 @@ func (m InstallerModel) View() string {
 	}
 	b.WriteString("\n")
 	switch m.state {
+	case installerConfirm:
+		b.WriteString(instGroupStyle.Render("Se va a ejecutar, en este orden:"))
+		b.WriteString("\n")
+		for n, idx := range m.queue {
+			b.WriteString(normalStyle.Render(fmt.Sprintf("  %d. %s   %s", n+1, m.steps[idx].title, descStyle.Render(m.steps[idx].cmd))))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+		b.WriteString(instWarnStyle.Render("  y/enter ejecutar · n volver a la lista"))
 	case installerSelect:
-		b.WriteString(descStyle.Render("space/x marcar · a todo/nada · p solo lo pendiente · enter ejecutar en orden · esc volver"))
+		b.WriteString(descStyle.Render("space/x marcar · a todo/nada · p solo lo pendiente · enter revisar y confirmar · esc volver"))
 	case installerRunning:
 		b.WriteString(instWarnStyle.Render("  ejecutando... (cada paso se muestra en la terminal; Enter al terminar cada uno)"))
 	case installerDone:

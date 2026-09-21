@@ -10,8 +10,8 @@ make setup          # interactive installer: tick what to install / authenticate
 `make setup` opens the prebuilt `dtool` (binaries for macOS Intel/ARM and Linux live in `dtool/bin/`, no Go needed) on its **Installer** page: a checklist with
 opencode config, herdr, Neovim, `gh auth login`, one line per MCP server from the
 catalog (showing whether it is already authenticated), and the disk cleanups.
-`space` toggles, `p` selects only what is pending, `enter` runs the selection in
-order — each step in the real terminal, so `sudo` and OAuth browser prompts work.
+`space` toggles, `p` selects only what is pending, `enter` shows the ordered list
+and asks `y` to confirm before running — each step in the real terminal, so `sudo` and OAuth browser prompts work.
 `make setup_dry` shows the commands without running them.
 
 
