@@ -16,6 +16,8 @@ MAX_CHARS = int(os.environ.get("MCP_MAX_CHARS", "6000"))
 CACHE_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "mcp-sh-cache")
 CACHE_TTL = int(os.environ.get("MCP_CACHE_TTL", "600"))
 MCPORTER = os.environ.get("MCP_MCPORTER_BIN", "mcporter")
+# Siempre --no-oauth: sin token el error dice "run mcporter auth <server>"; un
+# agente (o una sonda de estado) no debe abrir el navegador del usuario.
 
 USAGE = """mcp.sh — every MCP server you have, as commands. Run with bash.
 
@@ -80,7 +82,7 @@ def tools_json(server):
     if os.path.exists(f) and time.time() - os.path.getmtime(f) < CACHE_TTL:
         with open(f) as fh:
             return json.load(fh)
-    r = run(["list", server, "--json"])
+    r = run(["list", server, "--json", "--no-oauth"])
     try:
         d = json.loads(r.stdout)
     except json.JSONDecodeError:
@@ -99,7 +101,7 @@ def tool_names_quiet(server):
         if os.path.exists(f) and time.time() - os.path.getmtime(f) < CACHE_TTL:
             with open(f) as fh:
                 return [t["name"] for t in json.load(fh).get("tools") or []]
-        r = run(["list", server, "--json"])
+        r = run(["list", server, "--json", "--no-oauth"])
         d = json.loads(r.stdout)
         if d.get("tools"):
             os.makedirs(CACHE_DIR, exist_ok=True)
@@ -427,7 +429,7 @@ def cmd_call(a):
     if problems:
         die(f"{s}.{t}: not sent — the arguments do not match the tool's schema:\n  - " + "\n  - ".join(problems) +
             f"\nSee: mcp.sh describe {s}.{t}   (nested shape + example). This is an argument error, not a server bug.", 4)
-    r = run(["call", f"{s}.{t}", *rest, "--output", "text"])
+    r = run(["call", f"{s}.{t}", *rest, "--output", "text", "--no-oauth"])
     if r.returncode != 0:
         out = (r.stderr or "") + (r.stdout or "")
         msg = f"{s}.{t} failed (exit {r.returncode}):\n" + "\n".join(out.strip().splitlines()[-8:])
@@ -442,7 +444,7 @@ def cmd_call(a):
 
 
 def cmd_status(a):
-    r = run(["list", *a[:1], "--status"])
+    r = run(["list", *a[:1], "--status", "--no-oauth"])
     lines = [l for l in (r.stdout + r.stderr).splitlines() if l.strip()]
     print("\n".join(lines[-20:]))
     sys.exit(r.returncode)

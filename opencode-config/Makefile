@@ -32,9 +32,13 @@ help:
 	@echo "Repo:    $(REPO_DIR)"
 	@echo "Target:  $(TARGET_DIR)"
 
-## install: Crea los symlinks (respalda lo existente primero), mcporter, gh y el catalogo MCP
+## install: Symlinks de la config de opencode (respalda lo existente) + gh. mcporter/MCP van aparte: make mcporter
 .PHONY: install
-install: backup clis
+install: backup links gh
+
+## links: Solo los symlinks ~/.config/opencode/* -> este repo
+.PHONY: links
+links:
 	@mkdir -p "$(TARGET_DIR)"
 	@for item in $(LINKS); do \
 		src="$(REPO_DIR)/$$item"; \
@@ -44,7 +48,7 @@ install: backup clis
 		ln -s "$$src" "$$dst"; \
 		echo "  linked  $$dst -> $$src"; \
 	done
-	@echo "✅ install completo."
+	@echo "✅ symlinks listos."
 
 ## uninstall: Elimina solo los symlinks creados por este repo
 .PHONY: uninstall
@@ -107,21 +111,32 @@ test-conn:
 init-agents:
 	@bash "$(REPO_DIR)/bin/init-agents.sh" "$(if $(DIR),$(DIR),$(CURDIR))"
 
-## clis: Instala mcporter (todos los MCP por bash) y gh (herramienta de desarrollo)
+## clis: mcporter + gh (atajo: make mcporter gh)
 .PHONY: clis
-clis:
+clis: mcporter gh
+
+## mcporter: Instala mcporter (todos los MCP por bash) y enlaza el catalogo; NO autentica nada
+.PHONY: mcporter
+mcporter:
 	@# Una sola via para integraciones: MCP a traves de mcporter + bin/mcp.sh.
 	@# opencode.jsonc lleva `mcp: {}` a proposito: un MCP declarado ahi mete su
 	@# esquema en CADA turno (Notion: 4370 tok solo lectura). Por mcp.sh cuesta 0
-	@# hasta que se usa. `gh` no es una integracion: es parte del flujo de git.
+	@# hasta que se usa. Autenticar es aparte y por servidor: mcporter auth <s>.
 	@if command -v mcporter >/dev/null 2>&1; then \
 		echo "  ✅ mcporter $$(mcporter --version </dev/null 2>/dev/null) ya instalado"; \
 	elif command -v npm >/dev/null 2>&1; then \
 		echo "  instalando mcporter con npm..."; \
 		npm install --global mcporter >/dev/null 2>&1 && echo "  ✅ mcporter instalado"; \
 	else \
-		echo "  ❌ falta npm (Node 22+): instala mcporter a mano -> https://github.com/steipete/mcporter"; \
+		echo "  ❌ falta npm (Node 22+): instala mcporter a mano -> https://github.com/steipete/mcporter"; exit 1; \
 	fi
+	@mkdir -p "$(HOME)/.mcporter"; ln -sfn "$(REPO_DIR)/mcporter/mcporter.json" "$(HOME)/.mcporter/mcporter.json"; \
+	echo "  linked  $(HOME)/.mcporter/mcporter.json -> $(REPO_DIR)/mcporter/mcporter.json"
+	@$(MAKE) --no-print-directory mcp-status
+
+## gh: GitHub CLI (herramienta de desarrollo, no una integracion)
+.PHONY: gh
+gh:
 	@if command -v gh >/dev/null 2>&1; then \
 		echo "  ✅ gh $$(gh --version 2>/dev/null | head -1 | awk '{print $$3}') ya instalado"; \
 	elif command -v brew >/dev/null 2>&1; then \
@@ -130,20 +145,16 @@ clis:
 	else \
 		echo "  ❌ falta Homebrew: instala gh a mano -> https://cli.github.com"; \
 	fi
-	@# El catalogo de servidores MCP vive en el repo; mcporter lo lee de ~/.mcporter.
-	@mkdir -p "$(HOME)/.mcporter"; ln -sfn "$(REPO_DIR)/mcporter/mcporter.json" "$(HOME)/.mcporter/mcporter.json"; \
-	echo "  linked  $(HOME)/.mcporter/mcporter.json -> $(REPO_DIR)/mcporter/mcporter.json"
-	@echo "  Autenticacion (una vez cada uno, abre el navegador):"
-	@gh auth status >/dev/null 2>&1 && echo "    ✅ gh: GitHub autenticado" || echo "    ○ gh: pendiente ->  gh auth login"
-	@$(MAKE) --no-print-directory mcp-status
+	@gh auth status >/dev/null 2>&1 && echo "  ✅ gh: GitHub autenticado" || echo "  ○ gh: sin autenticar ->  gh auth login"
 
-## mcp-status: Servidores MCP del catalogo: conectan? autenticados? cuantas tools?
+## mcp-status: Servidores MCP del catalogo: autenticados? cuantas tools? (nunca abre el navegador)
 .PHONY: mcp-status
 mcp-status:
-	@command -v mcporter >/dev/null 2>&1 || { echo "  mcporter no instalado (make clis)"; exit 0; }
+	@command -v mcporter >/dev/null 2>&1 || { echo "  mcporter no instalado (make mcporter)"; exit 0; }
+	@echo "  MCP (via mcporter):"
 	@for s in $$(python3 -c "import json;print(' '.join(json.load(open('$(REPO_DIR)/mcporter/mcporter.json'))['mcpServers']))"); do \
-		out=$$(mcporter list $$s --status </dev/null 2>&1 | grep -E "tools|auth|error|Error|unauthor" | head -1); \
-		case "$$out" in *tools*) echo "    ✅ $$s: $$out";; *) echo "    ○ $$s: pendiente ->  mcporter auth $$s   ($$out)";; esac; \
+		out=$$(mcporter list $$s --status --no-oauth </dev/null 2>&1 | grep -oE "[0-9]+ tools|auth required|HTTP [0-9]+|SSE error[^,)]*|unauthori[a-z]*" | head -1); \
+		case "$$out" in *tools*) echo "    ✅ $$s   $$out";; *) echo "    ○ $$s   sin autenticar ->  mcporter auth $$s";; esac; \
 	done
 
 ## bench-models: Compara modelos con las 4 tareas objetivas (MODEL=... TAG=... AGENT=... para uno solo)

@@ -21,8 +21,9 @@ import (
 // navegador— se ven y se contestan como en una terminal normal.
 //
 // Los servidores MCP salen del catalogo versionado (opencode-config/mcporter/
-// mcporter.json) con su estado real, para marcar solo los que quieres
-// autenticar: cada auth abre el navegador y no todos hacen falta en cada PC.
+// mcporter.json) con su estado real (sondeado con --no-oauth: mirar no
+// autentica). Marcas solo los que quieres: cada auth abre el navegador y no
+// todos hacen falta en cada PC.
 
 type installerState int
 
@@ -77,7 +78,8 @@ func NewInstallerModel() InstallerModel {
 	m := InstallerModel{mcpState: map[string]string{}}
 	m.repo, m.repoErr = findRepoRoot()
 	m.steps = []installStep{
-		{group: "setup", title: "opencode config", desc: "symlinks ~/.config/opencode, mcporter + gh, catalogo MCP (make install_opencode)", cmd: "make install_opencode"},
+		{group: "setup", title: "opencode config", desc: "symlinks ~/.config/opencode + gh (make install_opencode)", cmd: "make install_opencode"},
+		{group: "setup", title: "mcporter (MCP por bash)", desc: "instala mcporter y enlaza el catalogo de servidores; no autentica nada (make install_mcporter)", cmd: "make install_mcporter"},
 		{group: "setup", title: "herdr", desc: "runtime persistente para agentes: binario, config, integraciones (make install_herdr)", cmd: "make install_herdr"},
 		{group: "setup", title: "Neovim", desc: "Xcode CLT / Homebrew / neovim + nvim-config (make install_nvim YES=1)", cmd: "make install_nvim YES=1"},
 		{group: "auth", title: "GitHub: gh auth login", desc: "una vez por maquina; abre el navegador", cmd: "gh auth login"},
@@ -161,9 +163,11 @@ func (m InstallerModel) Init() tea.Cmd {
 func checkMCP(server string) tea.Cmd {
 	return func() tea.Msg {
 		if _, err := exec.LookPath("mcporter"); err != nil {
-			return mcpStatusMsg{server: server, status: "mcporter no instalado (corre primero 'opencode config')"}
+			return mcpStatusMsg{server: server, status: "mcporter no instalado (marca antes 'mcporter (MCP por bash)')"}
 		}
-		out, _ := runner.Run("mcporter", "list", server, "--status")
+		// --no-oauth: sin el, en una maquina sin token esta sonda ABRIA EL
+		// NAVEGADOR para cada servidor al entrar en la pagina (visto el 2026-09-21).
+		out, _ := runner.Run("mcporter", "list", server, "--status", "--no-oauth")
 		for _, line := range strings.Split(out, "\n") {
 			if i := strings.Index(line, " tools"); i > 0 {
 				start := strings.LastIndex(line[:i], "(")

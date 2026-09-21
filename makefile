@@ -1,6 +1,6 @@
 .PHONY: help setup setup_dry dtool_release install_nvim clean_system clean_system_dry clean_disk clean_disk_dry clean_disk_sudo \
 	dtool install_dtool install_opencode uninstall_opencode opencode_status \
-	install_herdr uninstall_herdr herdr_status
+	install_herdr uninstall_herdr herdr_status install_mcporter
 
 .DEFAULT_GOAL := help
 
@@ -16,10 +16,10 @@ DTOOL_OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 DTOOL_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
 DTOOL_BIN  := dtool/bin/dtool-$(DTOOL_OS)-$(DTOOL_ARCH)
 
-## setup: Instalador interactivo (dtool precompilado): elige que instalar, que autenticar (gh, cada MCP) y que ejecutar, en orden
+## setup: dtool (precompilado): menu principal; Installer es la primera entrada
 setup:
-	@test -x "$(DTOOL_BIN)" || { echo "no hay binario para $(DTOOL_OS)/$(DTOOL_ARCH) en dtool/bin/; con Go: make dtool && ./dtool/dtool --page installer"; exit 1; }
-	@"$(DTOOL_BIN)" --page installer
+	@test -x "$(DTOOL_BIN)" || { echo "no hay binario para $(DTOOL_OS)/$(DTOOL_ARCH) en dtool/bin/; con Go: make dtool && ./dtool/dtool"; exit 1; }
+	@"$(DTOOL_BIN)"
 
 ## setup_dry: El instalador sin ejecutar nada (lista los comandos que correria)
 setup_dry:
@@ -111,9 +111,13 @@ herdr_status:
 uninstall_herdr:
 	@[ -L "$(HERDR_CFG)/config.toml" ] && rm "$(HERDR_CFG)/config.toml" && echo "  unlinked $(HERDR_CFG)/config.toml" || echo "  (no era symlink)"
 
-# opencode config: symlinks ~/.config/opencode -> opencode-config/ (LM Studio on pcgamer)
+# opencode config: symlinks ~/.config/opencode -> opencode-config/ + gh
 install_opencode:
 	@$(MAKE) -C opencode-config install
+
+# mcporter: todos los MCP por bash (mcp.sh) + catalogo; autenticar es aparte (mcporter auth <server>)
+install_mcporter:
+	@$(MAKE) -C opencode-config mcporter
 
 uninstall_opencode:
 	@$(MAKE) -C opencode-config uninstall
