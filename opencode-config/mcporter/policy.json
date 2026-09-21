@@ -4,27 +4,103 @@
     "deny  : nunca se puede llamar (mcp.sh la oculta en `tools` y la rechaza en `call`).",
     "write : solo con `mcp.sh call --write ...`; opencode.jsonc pone ese comando en `ask`.",
     "Todo lo demas es lectura y se llama sin friccion.",
+    "Los patrones de `default` van con * a ambos lados: los servidores prefijan sus tools (notion-create-pages) y `create*` no casaria.",
     "`default` aplica a cualquier servidor sin entrada propia: escrituras por nombre en `write`, nada en deny.",
     "Un servidor que no este aqui NI en default no existe para mcp.sh: la lista de servidores viene de mcporter.json."
   ],
   "default": {
     "deny": [],
-    "write": ["create*", "update*", "edit*", "delete*", "remove*", "move*", "send*", "post*", "add*", "set*", "upload*", "publish*", "archive*", "transition*", "merge*", "run*", "execute*", "*order*", "*trade*", "*buy*", "*sell*", "*transfer*", "*withdraw*", "*deposit*"]
+    "write": [
+      "*create*",
+      "*update*",
+      "*edit*",
+      "*delete*",
+      "*remove*",
+      "*move*",
+      "*send*",
+      "*post*",
+      "*add*",
+      "*set*",
+      "*upload*",
+      "*publish*",
+      "*archive*",
+      "*transition*",
+      "*merge*",
+      "*run*",
+      "*execute*",
+      "*order*",
+      "*trade*",
+      "*buy*",
+      "*sell*",
+      "*transfer*",
+      "*withdraw*",
+      "*deposit*"
+    ]
   },
   "servers": {
     "notion": {
-      "deny": ["*session*", "*agent*", "*skill*", "*attachment*", "*file-upload*", "*meeting-notes*", "*async-task*", "*next-steps*", "notion-create-comment"],
-      "write": ["notion-create-*", "notion-update-*", "notion-move-*", "notion-duplicate-*"]
+      "deny": [
+        "*session*",
+        "*agent*",
+        "*skill*",
+        "*attachment*",
+        "*file-upload*",
+        "*meeting-notes*",
+        "*async-task*",
+        "*next-steps*",
+        "notion-create-comment"
+      ],
+      "write": [
+        "notion-create-*",
+        "notion-update-*",
+        "notion-move-*",
+        "notion-duplicate-*"
+      ]
     },
     "quantfury": {
       "_doc": "Broker con dinero real. Solo lectura hasta que el usuario diga lo contrario: todo lo que huela a operar esta en deny, no en write.",
-      "deny": ["*order*", "*trade*", "*buy*", "*sell*", "*close*", "*open*", "*position*create*", "*transfer*", "*withdraw*", "*deposit*", "*cancel*", "*modify*", "*place*", "*execute*"],
-      "write": ["create*", "update*", "delete*", "set*", "add*", "remove*"]
+      "deny": [
+        "*order*",
+        "*trade*",
+        "*buy*",
+        "*sell*",
+        "*close*",
+        "*open*",
+        "*position*create*",
+        "*transfer*",
+        "*withdraw*",
+        "*deposit*",
+        "*cancel*",
+        "*modify*",
+        "*place*",
+        "*execute*"
+      ],
+      "write": [
+        "*create*",
+        "*update*",
+        "*delete*",
+        "*set*",
+        "*add*",
+        "*remove*"
+      ]
     },
     "atlassian": {
       "_doc": "Rovo MCP: 18 tools primarias + discover/execute*. execute* y discover en deny: cargan tools ocultas en dos pasos y el modelo pequeno se pierde; usa las primarias.",
-      "deny": ["discover", "execute*", "*Teamwork*", "atlassianUserInfo"],
-      "write": ["create*", "edit*", "update*", "transition*", "add*", "delete*", "move*"]
+      "deny": [
+        "discover",
+        "execute*",
+        "*Teamwork*",
+        "atlassianUserInfo"
+      ],
+      "write": [
+        "*create*",
+        "*edit*",
+        "*update*",
+        "*transition*",
+        "*add*",
+        "*delete*",
+        "*move*"
+      ]
     }
   }
 }

@@ -81,9 +81,12 @@ steps: 120
 # top_k 40, min_p 0.05. `auto` sends 0.6/0.95. And the server runs with
 # `--reasoning-budget 700` (see `curl pcgamer:1234/running`), which is why
 # `reasoningEffort` never measured as anything: reasoning is capped server-side.
+# `bash: allow` / `edit: allow` NO van aqui: las reglas del agente se evaluan
+# DESPUES de las globales y "gana la ultima que coincide", asi que un `bash:
+# allow` por agente anulaba TODOS los `ask` de opencode.jsonc (sudo, git push,
+# rm -rf, mcp.sh call --write). Descubierto el 2026-09-21 con `sudo -n true`
+# pasando como allow. El global ya permite bash y edit; aqui solo lo que cambia.
 permission:
-  edit: allow
-  bash: allow
   webfetch: deny
   todowrite: deny
   task: deny

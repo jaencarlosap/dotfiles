@@ -1,5 +1,20 @@
 # Dotfiles
 
+## Quick start (new machine)
+
+```bash
+git clone <this repo> ~/Documents/personal/dotfiles && cd ~/Documents/personal/dotfiles
+make setup          # interactive installer: tick what to install / authenticate / run, in order
+```
+
+`make setup` builds and opens `dtool` on its **Installer** page: a checklist with
+opencode config, herdr, Neovim, `gh auth login`, one line per MCP server from the
+catalog (showing whether it is already authenticated), and the disk cleanups.
+`space` toggles, `p` selects only what is pending, `enter` runs the selection in
+order — each step in the real terminal, so `sudo` and OAuth browser prompts work.
+`make setup_dry` shows the commands without running them.
+
+
 Repository to unify the commands that I use most daily
 
 

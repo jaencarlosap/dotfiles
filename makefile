@@ -1,4 +1,4 @@
-.PHONY: help install_nvim clean_system clean_system_dry clean_disk clean_disk_dry clean_disk_sudo \
+.PHONY: help setup setup_dry install_nvim clean_system clean_system_dry clean_disk clean_disk_dry clean_disk_sudo \
 	dtool install_dtool install_opencode uninstall_opencode opencode_status \
 	install_herdr uninstall_herdr herdr_status
 
@@ -7,6 +7,14 @@
 ## help: Lista los targets
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /'
+
+## setup: Instalador interactivo (dtool): elige que instalar, que autenticar (gh, cada MCP) y que ejecutar, en orden
+setup: dtool
+	@./dtool/dtool --page installer
+
+## setup_dry: El instalador sin ejecutar nada (lista los comandos que correria)
+setup_dry: dtool
+	@./dtool/dtool --page installer --dry-run
 
 # Los scripts de shell viven en scripts/ y son los que usan estos targets.
 # dtool/ (TUI en Go) es la version interactiva de los mismos flujos, no un

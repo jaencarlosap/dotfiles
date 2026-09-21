@@ -12,6 +12,7 @@ type page int
 
 const (
 	homePage page = iota
+	installerPage
 	cleanerPage
 	nvimPage
 	burnerPage
@@ -24,17 +25,19 @@ type App struct {
 	width       int
 	height      int
 
-	home    pages.HomeModel
-	cleaner pages.CleanerModel
-	nvim    pages.NvimModel
-	burner  pages.BurnerModel
-	git     pages.GitModel
+	home      pages.HomeModel
+	installer pages.InstallerModel
+	cleaner   pages.CleanerModel
+	nvim      pages.NvimModel
+	burner    pages.BurnerModel
+	git       pages.GitModel
 }
 
 func NewApp() App {
 	return App{
 		currentPage: homePage,
 		home:        pages.NewHomeModel(),
+		installer:   pages.NewInstallerModel(),
 		cleaner:     pages.NewCleanerModel(),
 		nvim:        pages.NewNvimModel(),
 		burner:      pages.NewBurnerModel(),
@@ -43,6 +46,11 @@ func NewApp() App {
 }
 
 func (a App) Init() tea.Cmd {
+	// `dtool --page installer` entra sin pasar por Home: el Init de la pagina
+	// (las comprobaciones de estado de los MCP) tiene que dispararse aqui.
+	if a.currentPage == installerPage {
+		return a.installer.Init()
+	}
 	return nil
 }
 
@@ -60,6 +68,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if a.currentPage != homePage {
 				a.currentPage = homePage
+				a.installer = pages.NewInstallerModel()
 				a.cleaner = pages.NewCleanerModel()
 				a.nvim = pages.NewNvimModel()
 				a.burner = pages.NewBurnerModel()
@@ -75,6 +84,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pages.NavigateMsg:
 		switch msg.Target {
+		case "installer":
+			a.currentPage = installerPage
+			a.installer = pages.NewInstallerModel()
+			a.installer.SetDryRun(a.dryRun)
+			return a, a.installer.Init()
 		case "cleaner":
 			a.currentPage = cleanerPage
 			a.cleaner = pages.NewCleanerModel()
@@ -100,6 +114,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch a.currentPage {
 	case homePage:
 		a.home, cmd = a.home.Update(msg)
+	case installerPage:
+		a.installer, cmd = a.installer.Update(msg)
 	case cleanerPage:
 		a.cleaner, cmd = a.cleaner.Update(msg)
 	case nvimPage:
@@ -120,6 +136,8 @@ func (a App) View() string {
 	switch a.currentPage {
 	case homePage:
 		body = a.home.View()
+	case installerPage:
+		body = a.installer.View()
 	case cleanerPage:
 		body = a.cleaner.View()
 	case nvimPage:

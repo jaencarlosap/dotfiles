@@ -824,12 +824,18 @@ const t = async (n, f) => {
   writeFileSync(fake, `#!/usr/bin/env bash
 if [ "$1" = "list" ]; then
   if [ "$2" = "locked" ]; then echo "auth required — run 'mcporter auth locked'" >&2; exit 1; fi
+  if [ "$2" = "quantfury" ]; then
+    echo '{"name":"quantfury","status":"ok","tools":[{"name":"getQuote","description":"Quote","inputSchema":{"type":"object","properties":{"symbol":{"type":"string"}}}},{"name":"placeOrder","description":"Trade","inputSchema":{"type":"object","properties":{"symbol":{"type":"string"}}}}]}'
+    exit 0
+  fi
   cat <<'J'
 {"name":"$2","status":"ok","tools":[
  {"name":"notion-search","description":"Search pages.\\nLong text here.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"words"},"page_size":{"type":"integer"}},"required":["query"]}},
- {"name":"notion-create-pages","description":"Create pages","inputSchema":{"type":"object","properties":{"pages":{"type":"array","items":{"type":"object"}}},"required":["pages"]}},
+ {"name":"notion-fetch","description":"Fetch","inputSchema":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+ {"name":"notion-create-pages","description":"Create pages","inputSchema":{"type":"object","properties":{"pages":{"type":"array","items":{"type":"object","properties":{"properties":{"type":"object","additionalProperties":{"anyOf":[{"type":"string"},{"type":"number"}]}},"content":{"type":"string","description":"Notion Markdown"}},"additionalProperties":false}},"creation_mode":{"type":"string"}},"required":["pages"]}},
  {"name":"notion-spawn-session","description":"Agents","inputSchema":{"type":"object","properties":{}}},
- {"name":"placeOrder","description":"Trade","inputSchema":{"type":"object","properties":{"symbol":{"type":"string"}}}}
+ {"name":"getThing","description":"Read","inputSchema":{"type":"object","properties":{}}},
+ {"name":"createThing","description":"Write","inputSchema":{"type":"object","properties":{}}}
 ]}
 J
   exit 0
@@ -863,7 +869,7 @@ echo "unknown" >&2; exit 1
     const r = mcp("tools", "notion")
     if (r.rc !== 0) throw new Error(r.out)
     if (!r.out.includes("notion-search(query: string, page_size?: integer)")) throw new Error("firma mal: " + r.out)
-    if (!r.out.includes("notion-create-pages(pages: object[]) [write]")) throw new Error("no marca write: " + r.out)
+    if (!r.out.includes("notion-create-pages(pages: object[], creation_mode?: string) [write]")) throw new Error("no marca write: " + r.out)
     if (r.out.includes("spawn-session")) throw new Error("mostro una tool deny")
     if (!r.out.includes("hidden by policy")) throw new Error("no cuenta las ocultas")
     if (r.out.includes("Long text here")) throw new Error("no recorta la descripcion a la primera linea")
@@ -876,7 +882,7 @@ echo "unknown" >&2; exit 1
     const ok = mcp("call", "notion.notion-search", "query=habit")
     if (ok.rc !== 0 || !ok.out.includes("CALLED notion.notion-search ARGS: query=habit")) throw new Error(ok.out)
     const w = mcp("call", "notion.notion-create-pages", "pages:=[]")
-    if (w.rc !== 3 || !w.out.includes("mcp.sh call --write notion.notion-create-pages pages:=[]")) throw new Error(w.rc + " " + w.out)
+    if (w.rc !== 3 || !w.out.includes("mcp.sh call --write notion.notion-create-pages 'pages:=[]'")) throw new Error(w.rc + " " + w.out)
     const w2 = mcp("call", "--write", "notion.notion-create-pages", "pages:=[]")
     if (w2.rc !== 0 || !w2.out.includes("CALLED notion.notion-create-pages")) throw new Error(w2.out)
   })
@@ -898,6 +904,10 @@ echo "unknown" >&2; exit 1
   await t("describe: parametros con tipo, requeridos y aviso de --write", async () => {
     const r = mcp("describe", "notion.notion-create-pages")
     if (r.rc !== 0 || !r.out.includes("[write: needs --write]") || !r.out.includes("pages: object[]")) throw new Error(r.out)
+    // La forma ANIDADA es lo que el modelo no veia y rellenaba con el formato REST de memoria.
+    if (!r.out.includes("each item: { properties?: object, content?: string }   (no other keys)")) throw new Error("sin forma anidada: " + r.out)
+    if (!r.out.includes("properties: flat map name -> string|number")) throw new Error("no explica el mapa plano: " + r.out)
+    if (!r.out.includes(`mcp.sh call --write notion.notion-create-pages pages:='[{"properties": {"<name>": "<value>"}, "content": "<content>"}]'`)) throw new Error("sin ejemplo: " + r.out)
     if (mcp("describe", "notion.notion-spawn-session").rc === 0) throw new Error("describe mostro una tool deny")
   })
   await t("auth pendiente -> dice exactamente que correr", async () => {
@@ -910,13 +920,30 @@ echo "unknown" >&2; exit 1
     const r = mcp("call", "notion.notion-fetch", "id=x")
     if (r.rc === 0 || !r.out.includes("property names") || !r.out.includes("not always 'Name'")) throw new Error(r.out)
     const r2 = mcp("call", "notion.notion-search", "query=received string")
-    if (r2.rc === 0 || !r2.out.includes("argument error, not a server bug")) throw new Error(r2.out)
+    if (r2.rc === 0 || !r2.out.includes("argument error, not a server bug") || !r2.out.includes("NOT what this MCP takes")) throw new Error(r2.out)
+  })
+  await t("selector sin servidor: se resuelve solo si es unico; ambiguo o inexistente -> selectores exactos", async () => {
+    const r = mcp("call", "getQuote", "symbol=BTC")
+    if (r.rc !== 0 || !r.out.includes("CALLED quantfury.getQuote")) throw new Error("no resolvio el servidor: " + r.out)
+    const amb = mcp("call", "notion-search", "query=x")
+    if (amb.rc === 0 || !amb.out.includes("exists in several servers") || !amb.out.includes("other.notion-search")) throw new Error("no detecto la ambiguedad: " + amb.out)
+    const r2 = mcp("call", "nada-de-nada", "query=x")
+    if (r2.rc === 0 || !r2.out.includes("no server has a tool named that")) throw new Error(r2.out)
+  })
+  await t("validacion local: clave desconocida en pages[0] o parametro inexistente -> no se envia (rc 4) y dice la correccion", async () => {
+    const r = mcp("call", "--write", "notion.notion-create-pages", 'pages:=[{"title":"x","content":"y"}]')
+    if (r.rc !== 4 || !r.out.includes("unknown key(s) 'title'") || !r.out.includes('"properties": {"title": "..."}')) throw new Error(r.rc + " " + r.out)
+    if (r.out.includes("CALLED")) throw new Error("lo envio igualmente")
+    const r2 = mcp("call", "notion.notion-search", "q=x")
+    if (r2.rc !== 4 || !r2.out.includes("'q' is not a parameter") || !r2.out.includes("Parameters: query, page_size")) throw new Error(r2.out)
+    const ok = mcp("call", "--write", "notion.notion-create-pages", 'pages:=[{"properties":{"title":"x"},"content":"y"}]')
+    if (ok.rc !== 0 || !ok.out.includes("CALLED notion.notion-create-pages")) throw new Error("rechazo una llamada valida: " + ok.out)
   })
   await t("servidor o formato desconocido -> error util, no traza", async () => {
     const r = mcp("call", "nope.tool")
     if (r.rc === 0 || !r.out.includes("no server named nope") || r.out.includes("Traceback")) throw new Error(r.out)
     const r2 = mcp("call", "sinpunto")
-    if (r2.rc === 0 || !r2.out.includes("use: mcp.sh call")) throw new Error(r2.out)
+    if (r2.rc === 0 || !r2.out.includes("no server has a tool named that")) throw new Error(r2.out)
   })
   await t("la politica real: quantfury no deja nada que huela a operar; notion oculta sesiones/skills/adjuntos", async () => {
     const pol = JSON.parse(readFileSync(join(HERE, "..", "mcporter", "policy.json"), "utf8"))

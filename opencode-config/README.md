@@ -115,6 +115,49 @@ lista, deja el ticket en fichero y no lo sube (ya lo contemplaba).
   `tui.json`; su plugin usa globales de Bun y exporta una factory con nombre,
   asi que los tests de carga de `test/plugins.mjs` lo rechazarian.
 
+## 🩹 Lo que un modelo pequeno hizo con `mcp.sh`, y lo que se cambio — 2026-09-21
+
+Dos maquinas, el mismo pedido ("crea una pagina en Notion con este markdown"),
+dos formas de fallar, ninguna del servidor:
+
+- **PC 2**: mando `pages='[...]'` (texto, no JSON), puso `title` suelto dentro
+  de `pages[0]` y, cuando el error decia "expected object, received string",
+  concluyo "el MCP de Notion esta roto" y cito issues de GitHub (#82, #192,
+  #215) **que son del servidor local open-source y que no leyo**. Tambien
+  invento una tool (`notion-query-database-view`).
+- **Este Mac**: escribio `mcp.sh call --write notion-create-pages` sin el
+  `notion.` diez veces; cada vez recibia el texto generico de uso, nunca supo
+  que faltaba, y termino intentando saltarse el wrapper (`python3 _mcp.py`).
+
+Cambios, todos en la herramienta (el modelo copia lo que lee; una regla no
+compite con un mensaje de error confuso):
+
+| sintoma | cambio en `bin/_mcp.py` |
+| --- | --- |
+| `k=<json>` en un parametro object/array | se manda tipado (`:=`) segun el esquema, con aviso |
+| `title` suelto en `pages[0]`, parametro `q` inexistente | **validacion local antes de enviar** (rc 4): "unknown key 'title'. Allowed: properties, content... — for a title use properties: {title: ...}" |
+| selector sin servidor | se resuelve solo si el nombre es unico (`notion-search` -> `notion.notion-search`), ambiguo -> lista de selectores exactos |
+| `describe` solo mostraba el primer nivel | muestra la forma anidada (`each item: { properties?: object, content?: string } (no other keys)`, `flat map name -> string`) y un **ejemplo generado del esquema** |
+| errores del servidor crudos | pistas por tipo: "argument error, not a server bug"; "the database lists its property names; the title property is not always Name"; "do NOT use the REST API shape from memory" |
+
+Con eso, el mismo pedido en `auto`: `tools` -> `describe` -> `call --write`
+con `properties.title` + `content`, pagina creada, 3 pasos, 32 s.
+
+**Y un bug propio que salio al comprobar el `ask`**: la llamada `--write` NO
+pidio confirmacion. `agent/auto.md` llevaba `permission: bash: allow`; las
+reglas del agente se evaluan despues de las globales y gana la ultima que
+coincide, asi que ese `allow` anulaba **todos** los `ask` de bash del jsonc
+(`sudo *`, `git push *`, `rm -rf *`, `gh pr merge *`, `mcp.sh call --write *`)
+desde que existia. Verificado con `sudo -n true`: `action=allow pattern=*`.
+Quitado del frontmatter (el global ya permite bash/edit): ahora `sudo -n true`
+y `mcp.sh call --write` resuelven a `ask`. Regla: en el agente solo lo que
+difiere del global, nunca un `allow` amplio.
+
+Tambien: `rules/tools.md` tiene "When a command fails" (leer el error literal,
+sospechar de la llamada, aislar, "bug conocido" solo con fuente leida en la
+sesion, informar sin veredicto). Y `policy.json` usa `*create*` (subcadena) en
+vez de `create*`: los servidores prefijan sus tools.
+
 ## 🔀 Una sola via: todos los MCP por bash con mcporter (`mcp.sh`) — 2026-09-18
 
 El usuario quiso sumar MCPs sin CLI (Quantfury) y una unica forma de entrada,

@@ -28,6 +28,11 @@ func NewHomeModel() HomeModel {
 	return HomeModel{
 		items: []menuItem{
 			{
+				title:       "Installer",
+				description: "Choose what to install, authenticate or run — in order",
+				target:      "installer",
+			},
+			{
 				title:       "System Cleaner",
 				description: "Clean caches, temp files, and developer artifacts",
 				target:      "cleaner",
