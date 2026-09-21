@@ -12,7 +12,7 @@ BACKUP_DIR   := $(REPO_DIR)/.backups
 STAMP        := $(shell date +%Y%m%d-%H%M%S)
 
 # Archivos/carpetas que gestionamos (relativos a TARGET_DIR)
-LINKS        := opencode.jsonc agent rules command plugin bin templates skill memory
+LINKS        := opencode.jsonc agent rules command plugin bin templates skill memory mcporter
 
 # Endpoint del PC con los modelos: llama-swap delante de llama.cpp, via
 # Tailscale. NO es LM Studio (lo fue). Se nota en dos sitios:
@@ -32,7 +32,7 @@ help:
 	@echo "Repo:    $(REPO_DIR)"
 	@echo "Target:  $(TARGET_DIR)"
 
-## install: Crea los symlinks (respalda lo existente primero) e instala los CLIs (acli, ntn)
+## install: Crea los symlinks (respalda lo existente primero), mcporter, gh y el catalogo MCP
 .PHONY: install
 install: backup clis
 	@mkdir -p "$(TARGET_DIR)"
@@ -107,30 +107,20 @@ test-conn:
 init-agents:
 	@bash "$(REPO_DIR)/bin/init-agents.sh" "$(if $(DIR),$(DIR),$(CURDIR))"
 
-## clis: Instala los CLIs que el agente usa por bash (acli = Jira/Confluence, ntn = Notion, gh = GitHub)
+## clis: Instala mcporter (todos los MCP por bash) y gh (herramienta de desarrollo)
 .PHONY: clis
 clis:
-	@# Por que CLIs y no MCP: un MCP mete su esquema en CADA turno (Notion: 4370
-	@# tok solo para leer; Atlassian: 18 tools primarias sin medir). Un comando
-	@# por bash cuesta 0 tokens hasta que se usa. Los dos son oficiales y
-	@# autentican con OAuth de usuario: el agente ve lo que tu ves.
-	@if command -v acli >/dev/null 2>&1; then \
-		echo "  ✅ acli $$(acli --version 2>/dev/null | awk '{print $$3}') ya instalado"; \
-	elif command -v brew >/dev/null 2>&1; then \
-		echo "  instalando acli (Atlassian CLI) con Homebrew..."; \
-		brew tap atlassian/homebrew-acli >/dev/null 2>&1 || true; \
-		brew trust atlassian/acli >/dev/null 2>&1 || true; \
-		brew install acli && echo "  ✅ acli instalado"; \
-	else \
-		echo "  ❌ falta Homebrew: instala acli a mano -> https://developer.atlassian.com/cloud/acli/guides/install-macos/"; \
-	fi
-	@if command -v ntn >/dev/null 2>&1; then \
-		echo "  ✅ ntn $$(ntn --version 2>/dev/null | awk '{print $$2}') ya instalado"; \
+	@# Una sola via para integraciones: MCP a traves de mcporter + bin/mcp.sh.
+	@# opencode.jsonc lleva `mcp: {}` a proposito: un MCP declarado ahi mete su
+	@# esquema en CADA turno (Notion: 4370 tok solo lectura). Por mcp.sh cuesta 0
+	@# hasta que se usa. `gh` no es una integracion: es parte del flujo de git.
+	@if command -v mcporter >/dev/null 2>&1; then \
+		echo "  ✅ mcporter $$(mcporter --version </dev/null 2>/dev/null) ya instalado"; \
 	elif command -v npm >/dev/null 2>&1; then \
-		echo "  instalando ntn (Notion CLI) con npm..."; \
-		npm install --global ntn >/dev/null 2>&1 && echo "  ✅ ntn instalado"; \
+		echo "  instalando mcporter con npm..."; \
+		npm install --global mcporter >/dev/null 2>&1 && echo "  ✅ mcporter instalado"; \
 	else \
-		echo "  ❌ falta npm (Node 22+): instala ntn a mano -> https://developers.notion.com/cli/get-started/installation"; \
+		echo "  ❌ falta npm (Node 22+): instala mcporter a mano -> https://github.com/steipete/mcporter"; \
 	fi
 	@if command -v gh >/dev/null 2>&1; then \
 		echo "  ✅ gh $$(gh --version 2>/dev/null | head -1 | awk '{print $$3}') ya instalado"; \
@@ -140,24 +130,21 @@ clis:
 	else \
 		echo "  ❌ falta Homebrew: instala gh a mano -> https://cli.github.com"; \
 	fi
-	@echo "  Autenticacion (una vez, abre el navegador):"
+	@# El catalogo de servidores MCP vive en el repo; mcporter lo lee de ~/.mcporter.
+	@mkdir -p "$(HOME)/.mcporter"; ln -sfn "$(REPO_DIR)/mcporter/mcporter.json" "$(HOME)/.mcporter/mcporter.json"; \
+	echo "  linked  $(HOME)/.mcporter/mcporter.json -> $(REPO_DIR)/mcporter/mcporter.json"
+	@echo "  Autenticacion (una vez cada uno, abre el navegador):"
 	@gh auth status >/dev/null 2>&1 && echo "    ✅ gh: GitHub autenticado" || echo "    ○ gh: pendiente ->  gh auth login"
-	@acli jira auth status >/dev/null 2>&1 && echo "    ✅ acli: Jira autenticado" || echo "    ○ acli: pendiente ->  acli jira auth login --web"
-	@ntn doctor </dev/null 2>&1 | grep -q "Public API authenticated" && echo "    ✅ ntn: Notion autenticado" || echo "    ○ ntn: pendiente ->  ntn login"
+	@$(MAKE) --no-print-directory mcp-status
 
-## mcp: Estado de los servidores MCP (+ chequeo real de conectividad)
-.PHONY: mcp
-mcp:
-	@opencode mcp list 2>&1 | grep -vE '^\s*$$' || true
-	@echo ""
-	@echo "  Nota: '✓ connected' = el proceso arranca y hace handshake."
-	@echo "        NO garantiza que sus herramientas devuelvan datos."
-	@python3 -c "\
-import re,json,urllib.request,sys;\
-s=re.sub(r'^\s*//.*$$','',open('$(REPO_DIR)/opencode.jsonc').read(),flags=re.M);\
-m=json.loads(s).get('mcp') or {};\
-[print(f\"  {k}: declarado enabled={v.get('enabled', True)}\" + (' (remoto: ' + v['url'] + ')' if v.get('type')=='remote' else '')) for k,v in m.items()]"
-	@for u in $$(python3 -c "import re,json;s=re.sub(r'^\s*//.*$$','',open('$(REPO_DIR)/opencode.jsonc').read(),flags=re.M);[print(v['url']) for v in (json.loads(s).get('mcp') or {}).values() if v.get('type')=='remote' and v.get('enabled',True)]"); do 		code=$$(curl -s -m 3 -o /dev/null -w '%{http_code}' "$$u" 2>/dev/null); 		if [ "$$code" = "000" ]; then echo "  ❌ $$u no responde — ¿esta levantado el servidor?"; 		else echo "  ✅ $$u responde (HTTP $$code)"; fi; 	done
+## mcp-status: Servidores MCP del catalogo: conectan? autenticados? cuantas tools?
+.PHONY: mcp-status
+mcp-status:
+	@command -v mcporter >/dev/null 2>&1 || { echo "  mcporter no instalado (make clis)"; exit 0; }
+	@for s in $$(python3 -c "import json;print(' '.join(json.load(open('$(REPO_DIR)/mcporter/mcporter.json'))['mcpServers']))"); do \
+		out=$$(mcporter list $$s --status </dev/null 2>&1 | grep -E "tools|auth|error|Error|unauthor" | head -1); \
+		case "$$out" in *tools*) echo "    ✅ $$s: $$out";; *) echo "    ○ $$s: pendiente ->  mcporter auth $$s   ($$out)";; esac; \
+	done
 
 ## bench-models: Compara modelos con las 4 tareas objetivas (MODEL=... TAG=... AGENT=... para uno solo)
 .PHONY: bench-models

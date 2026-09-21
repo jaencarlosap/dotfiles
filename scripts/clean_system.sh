@@ -22,6 +22,9 @@ show_help() {
   echo "  --dry-run     Show what would be deleted without actually deleting"
   echo "  --yes, -y     Answer yes to every confirmation (non-interactive)"
   echo "  --only LIST   Run these options and skip the menu, e.g. --only 8,11,12"
+  echo "                Presets: --only user  (1,7,8,9,10,11,12: everything that needs no sudo"
+  echo "                         and asks no per-item question — what \`make clean_disk\` runs)"
+  echo "                         --only sudo  (2,3,4: system caches, /private/tmp, DNS)"
   echo "  --help, -h    Show this help message"
   echo ""
   echo "Run without sudo for user-level and developer cleanup."
@@ -797,10 +800,11 @@ clean_updater_caches() {
   # por directorio entero y estos viven mezclados con caches que si duelen.
   local targets=()
   local d
+  # Homebrew NO va aqui: lo limpia la opcion 8 (`brew cleanup` + vaciar la
+  # cache). Tenerlo en las dos contaba 3 GB dos veces en el resumen del dry-run.
   for d in "$REAL_HOME/Library/Caches"/*.ShipIt \
            "$REAL_HOME/Library/Caches"/*-updater \
-           "$REAL_HOME/Library/Caches/com.apple.python" \
-           "$REAL_HOME/Library/Caches/Homebrew"; do
+           "$REAL_HOME/Library/Caches/com.apple.python"; do
     [ -d "$d" ] && targets+=("$d")
   done
 
@@ -1011,7 +1015,14 @@ main() {
     # Sin menu y sin `read`: es la unica forma de que esto se pueda lanzar
     # desde un agente, un alias o cron. Sin --only el script se BLOQUEA en el
     # primer prompt y parece colgado.
-    selection="$ONLY"
+    # Presets: los numeros son un detalle del menu; desde make o cron se pide
+    # la intencion. `user` es lo que se corrio el 2026-09-19 (35 GB liberados)
+    # y deja fuera 5 y 6 porque esos SIEMPRE preguntan que borrar.
+    case "$ONLY" in
+      user) selection="1,7,8,9,10,11,12" ;;
+      sudo) selection="2,3,4" ;;
+      *)    selection="$ONLY" ;;
+    esac
     echo ""
     echo "  🧹 macOS System Cleaner — running: $selection"
     [ "$DRY_RUN" = true ] && echo "  ⚠️  DRY RUN — nothing will be deleted"

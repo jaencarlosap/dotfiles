@@ -511,6 +511,21 @@ const t = async (n, f) => {
     if ((await run2({ first: true })).includes("<unfinished-task")) throw new Error("reanudo una tarea terminada")
     rmSync(join(dir, ".agent"), { recursive: true, force: true })
   })
+  await t("primer turno -> indice de servidores MCP del catalogo (sin red), y no despues", async () => {
+    const cat = join(gmem, "mcporter.json")
+    writeFileSync(cat, JSON.stringify({ mcpServers: { notion: { baseUrl: "https://x" }, quantfury: { baseUrl: "https://y" } } }))
+    process.env.MCP_CATALOG = cat
+    const hooks3 = await (await import(join(HERE, "..", "plugin", "ground-truth.ts") + "?mcp")).default({ directory: dir })
+    const tf3 = hooks3["experimental.chat.messages.transform"]
+    const go = async (first) => {
+      const msgs = first ? [{ role: "user", parts: [{ type: "text", text: "x" }] }] : [{ role: "user", parts: [{ type: "text", text: "a" }] }, { role: "assistant", parts: [{ type: "text", text: "b" }] }, { role: "user", parts: [{ type: "text", text: "x" }] }]
+      const o = { messages: msgs }; await tf3({}, o); return o.messages[o.messages.length - 1].parts[0].text
+    }
+    const first = await go(true)
+    if (!first.includes("<mcp-servers") || !first.includes("notion, quantfury") || !first.includes("mcp.sh tools")) throw new Error("sin indice MCP: " + first)
+    if ((await go(false)).includes("<mcp-servers")) throw new Error("repitio el indice MCP")
+    delete process.env.MCP_CATALOG
+  })
   await t("la puerta nombra memory.sh search como primer peldano", async () => {
     const txt = await run2({ first: true })
     if (!/memory\.sh search[^\n]*grep in/.test(txt)) throw new Error("memory.sh no va antes que grep: " + txt)
@@ -796,6 +811,111 @@ const t = async (n, f) => {
     process.env.OPENCODE_SAMPLING_OFF = "1"
     const o = await run("local"); delete process.env.OPENCODE_SAMPLING_OFF
     if (o.temperature !== undefined) throw new Error("sigue activo")
+  })
+}
+
+// ── mcp.sh (_mcp.py) con un mcporter FALSO ───────────────────────────────
+{
+  const dir = tmp("mcp")
+  const { mkdirSync, chmodSync } = await import("fs")
+  // mcporter falso: `list <server> --json` devuelve dos tools; `call` imprime sus args;
+  // el servidor "locked" simula OAuth pendiente.
+  const fake = join(dir, "mcporter")
+  writeFileSync(fake, `#!/usr/bin/env bash
+if [ "$1" = "list" ]; then
+  if [ "$2" = "locked" ]; then echo "auth required — run 'mcporter auth locked'" >&2; exit 1; fi
+  cat <<'J'
+{"name":"$2","status":"ok","tools":[
+ {"name":"notion-search","description":"Search pages.\\nLong text here.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"words"},"page_size":{"type":"integer"}},"required":["query"]}},
+ {"name":"notion-create-pages","description":"Create pages","inputSchema":{"type":"object","properties":{"pages":{"type":"array","items":{"type":"object"}}},"required":["pages"]}},
+ {"name":"notion-spawn-session","description":"Agents","inputSchema":{"type":"object","properties":{}}},
+ {"name":"placeOrder","description":"Trade","inputSchema":{"type":"object","properties":{"symbol":{"type":"string"}}}}
+]}
+J
+  exit 0
+fi
+if [ "$1" = "call" ]; then
+  if [ "$2" = "locked.x" ]; then echo "Unauthorized: OAuth required" >&2; exit 1; fi
+  echo "CALLED $2 ARGS: $3 $4"; exit 0
+fi
+echo "unknown" >&2; exit 1
+`)
+  chmodSync(fake, 0o755)
+  const catalog = join(dir, "mcporter.json")
+  writeFileSync(catalog, JSON.stringify({ mcpServers: { notion: { baseUrl: "https://x/mcp", description: "Notion" }, quantfury: { baseUrl: "https://q/mcp", description: "Broker" }, locked: { baseUrl: "https://l/mcp", description: "L" }, other: { baseUrl: "https://o/mcp", description: "sin politica propia" } } }))
+  const env = { ...process.env, MCP_MCPORTER_BIN: fake, MCP_CATALOG: catalog, MCP_POLICY: join(HERE, "..", "mcporter", "policy.json"), TMPDIR: dir }
+  const mcp = (...args) => {
+    try {
+      return { rc: 0, out: execFileSync("bash", [join(HERE, "..", "bin", "mcp.sh"), ...args], { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }) }
+    } catch (e) {
+      return { rc: e.status, out: (e.stdout ?? "") + (e.stderr ?? "") }
+    }
+  }
+  console.log("\nmcp.sh:")
+  await t("list: los servidores del catalogo, con si tienen politica propia", async () => {
+    const r = mcp("list")
+    if (r.rc !== 0 || !r.out.includes("- notion:") || !r.out.includes("- other:")) throw new Error(r.out)
+    if (!/other:.*\n.*policy: default/.test(r.out) || !/notion:.*\n.*policy: own/.test(r.out)) throw new Error("no distingue la politica: " + r.out)
+  })
+  await t("tools: firmas compactas, oculta las deny, marca las write", async () => {
+    const r = mcp("tools", "notion")
+    if (r.rc !== 0) throw new Error(r.out)
+    if (!r.out.includes("notion-search(query: string, page_size?: integer)")) throw new Error("firma mal: " + r.out)
+    if (!r.out.includes("notion-create-pages(pages: object[]) [write]")) throw new Error("no marca write: " + r.out)
+    if (r.out.includes("spawn-session")) throw new Error("mostro una tool deny")
+    if (!r.out.includes("hidden by policy")) throw new Error("no cuenta las ocultas")
+    if (r.out.includes("Long text here")) throw new Error("no recorta la descripcion a la primera linea")
+  })
+  await t("tools <server> <filtro> deja solo las que coinciden", async () => {
+    const r = mcp("tools", "notion", "search")
+    if (!r.out.includes("notion-search(") || r.out.includes("create-pages(")) throw new Error(r.out)
+  })
+  await t("call: lectura pasa; escritura sin --write se rechaza con el comando correcto (rc 3)", async () => {
+    const ok = mcp("call", "notion.notion-search", "query=habit")
+    if (ok.rc !== 0 || !ok.out.includes("CALLED notion.notion-search ARGS: query=habit")) throw new Error(ok.out)
+    const w = mcp("call", "notion.notion-create-pages", "pages:=[]")
+    if (w.rc !== 3 || !w.out.includes("mcp.sh call --write notion.notion-create-pages pages:=[]")) throw new Error(w.rc + " " + w.out)
+    const w2 = mcp("call", "--write", "notion.notion-create-pages", "pages:=[]")
+    if (w2.rc !== 0 || !w2.out.includes("CALLED notion.notion-create-pages")) throw new Error(w2.out)
+  })
+  await t("call: deny se bloquea aunque lleve --write (quantfury.placeOrder, rc 2)", async () => {
+    const r = mcp("call", "--write", "quantfury.placeOrder", "symbol=BTC")
+    if (r.rc !== 2 || !r.out.includes("BLOCKED by policy")) throw new Error(r.rc + " " + r.out)
+  })
+  await t("servidor sin politica propia usa default: create* exige --write, lecturas pasan", async () => {
+    if (mcp("call", "other.createThing").rc !== 3) throw new Error("default no exige --write para create*")
+    if (mcp("call", "other.getThing").rc !== 0) throw new Error("default bloqueo una lectura")
+  })
+  await t("describe: parametros con tipo, requeridos y aviso de --write", async () => {
+    const r = mcp("describe", "notion.notion-create-pages")
+    if (r.rc !== 0 || !r.out.includes("[write: needs --write]") || !r.out.includes("pages: object[]")) throw new Error(r.out)
+    if (mcp("describe", "notion.notion-spawn-session").rc === 0) throw new Error("describe mostro una tool deny")
+  })
+  await t("auth pendiente -> dice exactamente que correr", async () => {
+    const r = mcp("tools", "locked")
+    if (r.rc === 0 || !r.out.includes("mcporter auth locked")) throw new Error(r.out)
+    const c = mcp("call", "locked.x")
+    if (c.rc === 0 || !c.out.includes("mcporter auth locked")) throw new Error(c.out)
+  })
+  await t("servidor o formato desconocido -> error util, no traza", async () => {
+    const r = mcp("call", "nope.tool")
+    if (r.rc === 0 || !r.out.includes("no server named nope") || r.out.includes("Traceback")) throw new Error(r.out)
+    const r2 = mcp("call", "sinpunto")
+    if (r2.rc === 0 || !r2.out.includes("use: mcp.sh call")) throw new Error(r2.out)
+  })
+  await t("la politica real: quantfury no deja nada que huela a operar; notion oculta sesiones/skills/adjuntos", async () => {
+    const pol = JSON.parse(readFileSync(join(HERE, "..", "mcporter", "policy.json"), "utf8"))
+    const fn = (await import("fs")).readFileSync // noop para el linter
+    const check = (server, name) => {
+      const p = pol.servers[server]
+      const glob = (s, pat) => new RegExp("^" + pat.toLowerCase().replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$").test(s.toLowerCase())
+      return p.deny.some((x) => glob(name, x)) ? "deny" : p.write.some((x) => glob(name, x)) ? "write" : "read"
+    }
+    for (const n of ["placeOrder", "createOrder", "closePosition", "buyAsset", "sellAsset", "transferFunds", "cancelOrder"]) if (check("quantfury", n) !== "deny") throw new Error("quantfury deja pasar " + n)
+    for (const n of ["getQuote", "listPositions", "getAccountHistory"]) if (check("quantfury", n) !== "read") throw new Error("quantfury bloquea la lectura " + n)
+    for (const n of ["notion-spawn-session", "notion-download-skill", "notion-create-attachment", "notion-create-comment"]) if (check("notion", n) !== "deny") throw new Error("notion no oculta " + n)
+    for (const n of ["notion-create-pages", "notion-update-page", "notion-move-pages"]) if (check("notion", n) !== "write") throw new Error("notion no marca write " + n)
+    if (check("notion", "notion-search") !== "read" || check("notion", "notion-fetch") !== "read") throw new Error("notion bloquea lecturas")
   })
 }
 

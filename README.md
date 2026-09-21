@@ -53,9 +53,33 @@ on its own. Select **Hack Nerd Font** in your terminal profile for the icons.
 <details>
 <summary>Clean Macos System</summary>
 
-To clean your system files and cache, you can run
+Non-interactive (what an agent or cron should run; freed 35 GB on 2026-09-19):
+```bash
+make clean_disk         # user caches, Go, npm/pnpm/yarn/pip/brew/cargo, Docker (no volumes), updaters, ~/.cache
+make clean_disk_dry     # sizes only
+make clean_disk_sudo    # system caches, /private/tmp, DNS (asks for sudo)
+```
+Interactive menu (blocks on a prompt — for a human at the keyboard):
 ```bash
 make clean_system
+```
+The scripts live in `scripts/`; `dtool` is the TUI version of the same flows.
+</details>
+
+<details>
+<summary>herdr (persistent runtime for the agents, tmux-style)</summary>
+
+[herdr](https://herdr.dev) keeps the agents' terminals alive in a background
+server: close the lid, drop the network, reconnect later from the Mac or from
+the phone (any SSH client over Tailscale — there is no official mobile app; the
+"Herdr Mobile" on Google Play is third-party). Config lives in `herdr-config/`
+and is symlinked to `~/.config/herdr/config.toml`. Keybindings follow
+neovim/LazyVim habits: see the comments in the file, or `prefix+?` inside herdr.
+
+```bash
+make install_herdr   # brew install herdr + symlink config + opencode/claude integrations + config check
+make herdr_status    # client/server state, integrations, and the exact ssh line for the phone
+make uninstall_herdr # remove the config symlink only
 ```
 </details>
 

@@ -1,6 +1,6 @@
 ---
 name: jira-ticket
-description: Use when the user asks for a Jira ticket, a user story, acceptance criteria in Gherkin, or wants a request turned into something a developer can pick up — and also when they then ask to actually create it in Jira. Writes the ticket to a `ticket-<short-description>.md` file in the current folder so the user can read and correct it, asks first when the request is too vague for INVEST, grounds technical notes in the real code, marks anything unverified as [POR CONFIRMAR], and only after the user confirms creates the issue with the Atlassian CLI (`acli jira workitem create`, run with bash). Triggers in Spanish too: "hazme un ticket", "historia de usuario", "criterios de aceptacion", "pasalo a Jira", "crea el ticket en Jira", "subelo a Jira".
+description: Use when the user asks for a Jira ticket, a user story, acceptance criteria in Gherkin, or wants a request turned into something a developer can pick up — and also when they then ask to actually create it in Jira. Writes the ticket to a `ticket-<short-description>.md` file in the current folder so the user can read and correct it, asks first when the request is too vague for INVEST, grounds technical notes in the real code, marks anything unverified as [POR CONFIRMAR], and only after the user confirms creates the issue through the Atlassian MCP (`mcp.sh call --write atlassian.createJiraIssue`, run with bash). Triggers in Spanish too: "hazme un ticket", "historia de usuario", "criterios de aceptacion", "pasalo a Jira", "crea el ticket en Jira", "subelo a Jira".
 ---
 
 # Ticket de Jira (Historia de Usuario)
@@ -220,7 +220,7 @@ stopping.**
 ### Phase 1 — write the file, then stop
 
 You wrote the `.md` and you said the three lines from STEP 2. That is the whole
-turn. Do **not** run `acli`, do not ask "shall I create it?" twice, do not
+turn. Do **not** call `mcp.sh`, do not ask "shall I create it?" twice, do not
 invent an issue key. The point of the file is that a human reads it first.
 
 ### Phase 2 — only after an explicit "créalo en Jira" / "súbelo" / "adelante"
@@ -231,58 +231,63 @@ invent an issue key. The point of the file is that a human reads it first.
 2. If it still contains `[POR CONFIRMAR]`, say so in one line and ask whether to
    create it anyway. Sometimes the answer is yes; it is not your call.
 3. **Do you have a project key?** If not, ask — see the table. Never guess one.
-4. Run the command. **One call**, through `bash`:
+4. Run the command. **One call**, through `bash`. The tool is
+   `atlassian.createJiraIssue` behind `mcp.sh`; the first time in a session,
+   look at its real parameters, then call it with `--write` (the user gets the
+   permission prompt — that is the confirmation):
 
    ```bash
-   acli jira workitem create --project "ABC" --type "Story" \
-     --summary "<the text after 'h3. Titulo:', without the brackets>" \
-     --description-file "ticket-<short-description>.md" --json
+   mcp.sh describe atlassian.createJiraIssue
+   mcp.sh call --write atlassian.createJiraIssue projectKey="ABC" issueTypeName="Story" \
+     summary="<the text after 'h3. Titulo:', without the brackets>" \
+     description=@ticket-<short-description>.md
    ```
 
+   `cloudId` (if the tool asks for it) comes from `AGENTS.md` or from
+   `mcp.sh call atlassian.getAccessibleAtlassianResources` — never invented.
 5. On failure: report the error verbatim, in one line. Do not retry the same
-   call, and do not fall back to inventing a key. If it says `unauthorized`,
-   the user has to run `acli jira auth login --web` once — say exactly that.
-6. On success: the JSON has the `key`. Report it, and record it at the top of
-   the file so the file and Jira do not drift:
+   call, and do not fall back to inventing a key. If it says `unauthorized` or
+   `auth required`, the user has to run `mcporter auth atlassian` once — say
+   exactly that.
+6. On success: the result has the issue `key`. Report it, and record it at the
+   top of the file so the file and Jira do not drift:
 
    ```
    h3. Creado en Jira: ABC-123
    ```
 
-### The command and its flags
+### The tool and its parameters
 
-`acli` is the official Atlassian CLI, on your PATH, run with plain `bash`.
-Verified with `acli jira workitem create --help` (v1.3.36):
+Jira is reached through the Atlassian Rovo MCP server, from `bash`, via
+`mcp.sh` (see the "Tools on your PATH" rule). Parameter names come from
+`mcp.sh describe atlassian.createJiraIssue` **in the session** — the server
+changes them without notice, so this table is the intent, not the schema:
 
-| flag | required | value, and where you get it |
+| what | required | value, and where you get it |
 | --- | --- | --- |
-| `--project` / `-p` | **yes** | The project key (`ABC`). **The ticket template does NOT contain it** — the brackets in `h3. Titulo:` hold the title, nothing else. It comes from the user, or from an earlier ticket in this conversation. If you do not have it, ask: *"¿De qué proyecto de Jira es este ticket?"* Never guess. |
-| `--summary` / `-s` | **yes** | The title only: the text after `h3. Titulo:`, without the brackets. |
-| `--type` / `-t` | **yes** | `Story` unless the user said otherwise (`Bug`, `Task`, `Epic`). |
-| `--description-file` | no | The ticket file itself. It is already Jira markup — do not convert it to Markdown, do not re-indent it, do not paste it inline with `-d`. |
-| `--assignee` / `-a` | no | Only if the user gave an email or account id (`@me` = the user). |
-| `--label` / `-l` | no | Only if the user gave labels: `migración, urgente` → `--label "migración,urgente"`. |
-| `--parent` | no | Only if the user named a parent (an Epic key). |
-| `--json` | always | So the key comes back as data, not prose. |
+| project key | **yes** | `ABC`. **The ticket template does NOT contain it** — the brackets in `h3. Titulo:` hold the title, nothing else. It comes from the user, or from an earlier ticket in this conversation. If you do not have it, ask: *"¿De qué proyecto de Jira es este ticket?"* Never guess. |
+| summary | **yes** | The title only: the text after `h3. Titulo:`, without the brackets. |
+| issue type | **yes** | `Story` unless the user said otherwise (`Bug`, `Task`, `Epic`). |
+| description | no | The ticket file, whole, via `description=@<file>`. It is Jira markup — do not convert it to Markdown, do not re-indent it. |
+| assignee / labels / parent | no | Only if the user gave them. |
 
 Two rules for building the call:
 
-1. **Omit every optional flag you were not given.** Do not send `""` or a
+1. **Omit every optional parameter you were not given.** Do not send `""` or a
    guess to fill a slot. Jira has the defaults.
-2. **`--description-file` is the file as it is.** Jira markup goes in as Jira
-   markup. (First ticket through this path: check in Jira that the `h3.`
-   headings rendered. If they came out as literal text, tell the user — the
-   fix belongs in this skill, not in the ticket.)
+2. **The description is the file as it is.** (First ticket through this path:
+   check in Jira that the `h3.` headings rendered. If they came out as literal
+   text, tell the user — the fix belongs in this skill, not in the ticket.)
 
-If Jira rejects `--type`, that project does not accept that value:
-`acli jira project view ABC` and the error message list what it does accept.
+If Jira rejects the issue type, that project does not accept that value: the
+error message lists what it does accept.
 
-To read a ticket or search: `acli jira workitem view ABC-123` and
-`acli jira workitem search --jql "project = ABC AND status != Done" --limit 20`.
+To read a ticket or search: `mcp.sh tools atlassian jira` shows the read
+tools (`getJiraIssue`, `searchJiraIssuesUsingJql`, ...).
 
-**If `acli` is not on your PATH**, say exactly that (`make clis` in
-opencode-config installs it) and leave the file — the user can create it from
-the file. Do not pretend it was created, and do not invent a key.
+**If `mcp.sh tools atlassian` says auth is required**, say exactly that
+(`mcporter auth atlassian`, once) and leave the file — the user can create it
+from the file. Do not pretend it was created, and do not invent a key.
 
 ## Before you answer, re-read the block
 

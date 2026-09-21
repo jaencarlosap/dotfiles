@@ -1,0 +1,117 @@
+# herdr — configuracion versionada (dotfiles/herdr-config/config.toml)
+# Symlink: ~/.config/herdr/config.toml -> este fichero (make install_herdr).
+# Referencia completa: `herdr --default-config` y https://herdr.dev/docs/config-reference/
+# Validar tras editar: `herdr config check`; aplicar en caliente: `herdr server reload-config`.
+
+onboarding = false
+
+[theme]
+# LazyVim's default colorscheme. Others: catppuccin, kanagawa, rose-pine, gruvbox, nord...
+name = "tokyo-night"
+
+[update]
+# Instalado con el instalador oficial: `herdr update` actualiza; esto solo avisa.
+channel = "stable"
+version_check = true
+
+# ─────────────────────────────────────────────────────────────────────────
+# Keybindings — pensados para manos de neovim/LazyVim y tmux.
+#
+#  - Prefijo ctrl+space: no choca con la shell (ctrl+a/ctrl+b si) y en LazyVim
+#    solo pisa la seleccion incremental de treesitter, que rara vez se usa.
+#  - Paneles = ventanas de vim: prefix + h/j/k/l mueve el foco, prefix+v y
+#    prefix+s abren splits como :vsplit / :split, prefix+z maximiza (zoom).
+#  - Tabs = buffers: prefix + shift+h / shift+l como <S-h>/<S-l> en LazyVim.
+#  - prefix+e abre/cierra la barra lateral como <leader>e abre neo-tree.
+#  - prefix+g abre lazygit en popup como <leader>gg.
+#  - prefix+d se desconecta (detach) como en tmux; los agentes siguen vivos.
+#  Ayuda en vivo con las teclas activas: prefix+?
+# ─────────────────────────────────────────────────────────────────────────
+[keys]
+prefix = "ctrl+space"
+help = "prefix+?"
+settings = "prefix+comma"
+detach = "prefix+d"
+reload_config = "prefix+shift+r"
+open_notification_target = "prefix+o"
+
+# workspaces (un proyecto = un workspace)
+workspace_picker = "prefix+w"
+goto = "prefix+f"
+new_workspace = "prefix+shift+n"
+new_worktree = "prefix+shift+g"
+rename_workspace = "prefix+shift+w"
+close_workspace = "prefix+shift+d"
+previous_workspace = "prefix+shift+k"
+next_workspace = "prefix+shift+j"
+
+# tabs = buffers
+new_tab = "prefix+t"
+rename_tab = "prefix+shift+t"
+previous_tab = "prefix+shift+h"
+next_tab = "prefix+shift+l"
+close_tab = "prefix+shift+x"
+switch_tab = "prefix+1..9"
+
+# paneles = ventanas
+split_vertical = "prefix+v"
+split_horizontal = "prefix+s"
+focus_pane_left = "prefix+h"
+focus_pane_down = "prefix+j"
+focus_pane_up = "prefix+k"
+focus_pane_right = "prefix+l"
+last_pane = "prefix+tab"
+cycle_pane_next = "prefix+n"
+cycle_pane_previous = "prefix+p"
+close_pane = "prefix+x"
+zoom = "prefix+z"
+resize_mode = "prefix+r"
+rename_pane = "prefix+shift+p"
+edit_scrollback = "prefix+shift+e"
+toggle_sidebar = "prefix+e"
+
+# modo navegacion (barra lateral, prefix+w o prefix+f): h/j/k/l se mueven entre
+# paneles como en vim; la lista de workspaces va con las flechas (j/k no pueden
+# hacer las dos cosas: herdr desactiva una si coinciden).
+navigate_workspace_up = "up"
+navigate_workspace_down = "down"
+navigate_pane_left = "h"
+navigate_pane_down = "j"
+navigate_pane_up = "k"
+navigate_pane_right = "l"
+
+# lazygit en popup, como <leader>gg
+[[keys.command]]
+key = "prefix+g"
+type = "popup"
+command = "lazygit"
+width = "90%"
+height = "90%"
+
+# opencode en un panel temporal del workspace actual (se cierra al salir)
+[[keys.command]]
+key = "prefix+a"
+type = "pane"
+command = "opencode"
+
+# alt+1..9 cambia de tab sin prefijo (en Warp: Settings > Keyboard > "Option as Meta")
+[keys.indexed]
+tabs = "alt"
+
+[ui]
+status_indicators = "symbols"
+
+[ui.toast]
+delivery = "system"
+
+[ui.sound]
+enabled = true
+
+[session]
+# Al reiniciar el servidor, reabrir los agentes en su sesion nativa (requiere
+# `herdr integration install opencode|claude`, ya instaladas).
+resume_agents_on_restore = true
+
+[remote]
+# herdr --remote <host> usa tu ~/.ssh/config y anade keepalives si faltan.
+manage_ssh_config = true

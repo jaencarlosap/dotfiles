@@ -73,7 +73,8 @@
       "gh repo delete *": "ask",
       "gh release *": "ask",
       "gh api -X *": "ask",
-      "gh api --method *": "ask"
+      "gh api --method *": "ask",
+      "mcp.sh call --write *": "ask"
     },
     "read": {
       "*": "allow",

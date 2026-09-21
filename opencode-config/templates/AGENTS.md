@@ -37,6 +37,23 @@ What an agent CANNOT work out by reading the code:
 
 What does NOT go here: anything visible in the code, project history, plans.
 
+## External services
+
+Any external service you need (documents, tickets, data providers, …) is
+reached from `bash` through `mcp.sh`; which ones exist is whatever `mcp.sh
+list` prints right now, nothing more and nothing less. Never configure these
+servers natively in this agent — that would pay their tool schemas on every
+turn and ask for a second login.
+
+    mcp.sh list                              which services exist
+    mcp.sh tools <server> <word>             what one can do (always pass a word)
+    mcp.sh call <server>.<tool> k=v ...      read
+    mcp.sh call --write <server>.<tool> ...  create/update/send — the user confirms first
+
+The command's output is the fact: ids, URLs and numbers come from it, never
+from you. A tool `tools` does not list cannot be called. If it says auth is
+required, tell the user to run `mcporter auth <server>` once.
+
 ## What this project is
 
 <!-- One or two sentences: what it does, main language/framework. -->

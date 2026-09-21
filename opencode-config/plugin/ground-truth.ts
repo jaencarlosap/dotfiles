@@ -131,6 +131,20 @@ function repoMemory(dir: string): string[] {
   }
 }
 
+// Servidores MCP del catalogo de mcporter (mcp.sh): solo nombres, sin red.
+// Una linea en el primer turno para que sepa que existen; el resto va por
+// `mcp.sh tools <server>` cuando haga falta.
+const MCP_CATALOG = process.env.MCP_CATALOG ?? `${process.env.HOME}/.mcporter/mcporter.json`
+function mcpIndex(): string[] {
+  if (!existsSync(MCP_CATALOG)) return []
+  try {
+    const cfg = JSON.parse(readFileSync(MCP_CATALOG, "utf8"))
+    return Object.keys(cfg?.mcpServers ?? {})
+  } catch {
+    return []
+  }
+}
+
 function topicIndex(): string[] {
   const dir = join(GLOBAL_MEMORY, "topics")
   if (!existsSync(dir)) return []
@@ -214,6 +228,9 @@ export default (async ({ directory }: any) => {
         const topics = topicIndex()
         if (topics.length)
           block += `\n\n<global-memory note="injected once">topics you saved earlier (memory.sh show <topic>, or memory.sh search <terms>): ${topics.join(", ")}</global-memory>`
+        const mcps = mcpIndex()
+        if (mcps.length)
+          block += `\n\n<mcp-servers note="injected once">external services reachable with mcp.sh (mcp.sh tools <server> to see what each can do): ${mcps.join(", ")}</mcp-servers>`
         const task = unfinished(directory)
         if (task)
           block +=

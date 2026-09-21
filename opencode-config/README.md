@@ -24,8 +24,9 @@ El repo es la **fuente de verdad**. `make install` reemplaza los archivos en
 ## Uso
 
 ```bash
-make install       # crea los symlinks (respalda lo previo) + instala acli y ntn si faltan
-make clis          # solo los CLIs (acli = Jira, ntn = Notion, gh = GitHub) y su estado de autenticacion
+make install       # crea los symlinks (respalda lo previo) + mcporter, gh y el catalogo MCP
+make clis          # solo mcporter + gh + enlace del catalogo, y que autenticacion falta
+make mcp-status    # cada servidor MCP del catalogo: conecta? autenticado? cuantas tools?
 make status        # ver estado de los symlinks
 make test-conn     # ping al server de modelos en pcgamer
 make models        # lista modelos disponibles
@@ -33,7 +34,6 @@ make ctx           # contexto real del server vs. lo declarado + umbral
 make bench         # tokens/seg del modelo cargado
 make init-agents   # genera AGENTS.md en el proyecto actual (DIR=... o CWD)
 make test-plugins  # tests de los plugins que pueden bloquear al agente
-make mcp           # estado de los servidores MCP + ping a los remotos
 make uninstall     # quita los symlinks
 make restore       # restaura el ultimo respaldo
 ```
@@ -58,7 +58,9 @@ make restore       # restaura el ultimo respaldo
 | `bin/docs.sh`            | Consulta de paquetes (npm/PyPI/crates/go/MDN/wiki)         |
 | `bin/web.sh`             | Busqueda web (`search`) y lectura de una pagina (`read`)   |
 | `bin/memory.sh`          | Memoria en ficheros: `save` / `promote` / `search` / `show` (repo y global) |
-| `bin/notion.sh`          | Notion por bash sobre el CLI oficial `ntn`: `search` / `get` / `create` / `append` / `replace` |
+| `bin/mcp.sh` + `bin/_mcp.py` | TODOS los MCP por bash sobre mcporter: `list` / `tools` / `describe` / `call [--write]`, con politica |
+| `mcporter/mcporter.json` | Catalogo de servidores MCP (symlink a `~/.mcporter/mcporter.json`); credenciales fuera del repo |
+| `mcporter/policy.json`   | Por servidor: `deny` (no existe) y `write` (exige `--write` -> `ask`); `default` para los demas |
 | `memory/`                | Memoria GLOBAL versionada: `preferences.md` (siempre en contexto) y `topics/*.md` (bajo demanda) |
 | `bin/webfetch`, `bin/websearch` | Alias de shell para dos nombres de HERRAMIENTA que el modelo escribe en bash |
 | `skill/review-changes/`  | Skill: auditar un diff — verificar lo que afirma y que se quedo sin actualizar |
@@ -112,6 +114,61 @@ lista, deja el ticket en fichero y no lo sube (ya lo contemplaba).
   ordenadas), copia el plugin a `~/.config/opencode/plugins/` y crea un
   `tui.json`; su plugin usa globales de Bun y exporta una factory con nombre,
   asi que los tests de carga de `test/plugins.mjs` lo rechazarian.
+
+## 🔀 Una sola via: todos los MCP por bash con mcporter (`mcp.sh`) — 2026-09-18
+
+El usuario quiso sumar MCPs sin CLI (Quantfury) y una unica forma de entrada,
+no el hibrido CLI+MCP. Antes de decidir se valido en internet: MCP esta en la
+Linux Foundation (Agentic AI Foundation, dic-2025; AWS, Anthropic, Google,
+Microsoft, OpenAI...), el registro oficial pasa de 30k servidores (sep-2026), y
+la medicion de Checkly (jul-2026) da MCP ≈ CLI en tokens **cuando el harness
+carga tools de forma diferida**. opencode 1.18 no lo hace (medido aqui: todo el
+esquema en cada turno). `mcp.sh` es esa carga diferida hecha a mano.
+
+Que hay ahora:
+
+- `mcporter` (npm) + `bin/mcp.sh` (bash) + `bin/_mcp.py` (logica, testeable con
+  un mcporter falso). `mcp.sh list | tools <server> <word> | describe <server>.<tool>
+  | call [--write] <server>.<tool> k=v | status`.
+- `mcporter/mcporter.json`: el catalogo, versionado, symlink a `~/.mcporter/`.
+  Credenciales OAuth en `~/.mcporter/credentials.json`, fuera del repo.
+- `mcporter/policy.json`: por servidor, `deny` (la tool no existe para el
+  modelo: `tools` no la lista, `call` la rechaza con rc 2) y `write` (exige
+  `mcp.sh call --write`, que `permission.bash` pone en **ask**: el usuario ve el
+  comando entero). `default` cubre servidores sin entrada propia con patrones
+  de escritura por nombre. Se aplica en el wrapper, no se le pide al modelo.
+- `ground-truth` inyecta los nombres del catalogo en el primer turno (44 tok).
+- Servidores: `notion` (autenticado, 45 tools: 23 visibles, 22 ocultas),
+  `quantfury` (solo lectura por politica; OAuth pendiente del usuario),
+  `atlassian` (Rovo MCP; OAuth pendiente; `discover`/`execute*` en deny). La
+  skill `jira-ticket` crea con `mcp.sh call --write atlassian.createJiraIssue`.
+- Fuera: `notion.sh`, `ntn`, `acli` (desinstalados). `gh` se queda como
+  herramienta de desarrollo (parte del flujo de git, no una integracion).
+  `opencode.jsonc` sigue con `mcp: {}` a proposito.
+
+Coste, medido con el tokenizador de qwen-35b:
+
+| que | tokens |
+| --- | --- |
+| lineas de `mcp.sh` en `tools.md` (cubren TODOS los MCP, siempre) | 129 (antes `notion.sh` sola: 24) |
+| indice `<mcp-servers>` en el primer turno | 44, una vez |
+| `mcp.sh tools notion` sin filtro (23 tools) | 1080, una vez por sesion |
+| `mcp.sh tools notion search` (8) / `fetch` | 436 / 582 |
+| `mcp.sh describe notion.notion-search` | 468 |
+| salida de una busqueda (3 resultados) | 454 |
+| **por turno, siempre** | **0** (el MCP nativo: 4370) |
+
+Sesion real (misma tarea que con `notion.sh`): un paso mas — el modelo hizo
+`mcp.sh tools notion` sin filtro antes de `call`. Es el precio del
+descubrimiento: ~1k tokens y una llamada extra, una vez por servidor y sesion;
+la regla ahora pide pasar siempre una palabra de filtro (~450). Lo que se gano
+a cambio: cualquier MCP entra con una linea en el catalogo y su politica, sin
+tocar agente ni reglas ni medir esquemas, y Notion ya mostro por que la
+politica va por patron: tenia 43 tools el lunes y 45 hoy.
+
+Pendiente: OAuth de Quantfury y Atlassian (`mcporter auth <server>`), y al
+autenticar Quantfury revisar `mcp.sh tools quantfury` contra la politica —
+deberia listar solo lecturas. `gh auth login` sigue pendiente tambien.
 
 ## 🧰 `rules/tools.md`: el catalogo de comandos sale de `auto.md` — 2026-09-16
 

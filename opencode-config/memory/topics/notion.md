@@ -1,6 +1,6 @@
 # Notion
 
-- Notion is used through `notion.sh` (bin/, wraps the official `ntn` CLI): search | get | create | append | replace; content via stdin, the URL comes back from the command — source: opencode-config bin/notion.sh
-- `ntn login` is user OAuth: the agent sees what the user sees, no per-page sharing — source: developers.notion.com/cli
-- `ntn` blocks waiting for a stdin body whenever stdin is not a TTY (always, from an agent); every call needs `< /dev/null` — source: hang reproduced 2026-09-15
-- The Notion MCP was tried and removed: 43 tools (~61k tok of schema), 4370 tok/turn even for the read-only allowlist, and `notion-create-comment` has a schema llama.cpp cannot compile — source: opencode-config README 2026-09-14/15
+- Notion goes through mcp.sh (mcporter): `mcp.sh tools notion <word>` then `mcp.sh call notion.notion-search query=...` / `notion-fetch id=...`; writes need `--write` — source: opencode-config bin/mcp.sh
+- The server exposes 45 tools (2026-09-18; 43 on 09-14): policy hides sessions/agents/skills/attachments/comments; create/update/move/duplicate are write — source: mcporter/policy.json
+- No destination for a new page -> `creation_mode=draft` (private workspace-level page); never search for a destination the user did not name — source: notion-create-pages description
+- The Notion MCP in opencode.jsonc was measured at 4370 tok/turn read-only and `notion-create-comment` breaks llama.cpp's grammar; never declare it natively — source: README 2026-09-14/15

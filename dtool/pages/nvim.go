@@ -21,7 +21,7 @@ const (
 	nvimDone
 )
 
-// Same list as older_scripts/setup_nvim.sh. `node` is for Copilot and for the
+// Same list as scripts/setup_nvim.sh. `node` is for Copilot and for the
 // tree-sitter CLI, which comes from npm: brew's `tree-sitter` is only the
 // library, and `tree-sitter-cli` has no bottle on an Intel-prefix Homebrew
 // (it builds rust from source).
