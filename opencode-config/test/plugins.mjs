@@ -859,7 +859,17 @@ echo "unknown" >&2; exit 1
       return { rc: e.status, out: (e.stdout ?? "") + (e.stderr ?? "") }
     }
   }
+  const creds = join(dir, "credentials.json")
+  writeFileSync(creds, JSON.stringify({ entries: { "notion|1": { serverName: "notion", tokens: { accessToken: "x" } }, "quantfury|2": { serverName: "quantfury", clientInfo: {} } } }))
+  env.MCP_CREDENTIALS = creds
   console.log("\nmcp.sh:")
+  await t("status: lee credentials.json en local y NUNCA llama a mcporter (era lo que abria el navegador)", async () => {
+    const calls = join(dir, "calls.log")
+    writeFileSync(fake, readFileSync(fake, "utf8").replace("#!/usr/bin/env bash\n", `#!/usr/bin/env bash\necho "$@" >> '${calls}'\n`))
+    const r = mcp("status")
+    if (r.rc !== 0 || !/notion\s+sesion guardada/.test(r.out) || !/quantfury\s+sin autenticar/.test(r.out) || !/other\s+sin autenticar/.test(r.out)) throw new Error(r.out)
+    if (existsSync(calls)) throw new Error("status invoco a mcporter: " + readFileSync(calls, "utf8"))
+  })
   await t("list: los servidores del catalogo, con si tienen politica propia", async () => {
     const r = mcp("list")
     if (r.rc !== 0 || !r.out.includes("- notion:") || !r.out.includes("- other:")) throw new Error(r.out)

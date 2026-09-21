@@ -147,15 +147,16 @@ gh:
 	fi
 	@gh auth status >/dev/null 2>&1 && echo "  ✅ gh: GitHub autenticado" || echo "  ○ gh: sin autenticar ->  gh auth login"
 
-## mcp-status: Servidores MCP del catalogo: autenticados? cuantas tools? (nunca abre el navegador)
+## mcp-status: Servidores MCP del catalogo: cuales tienen sesion guardada (lectura LOCAL; nunca abre el navegador)
 .PHONY: mcp-status
 mcp-status:
+	@MCP_CATALOG="$(REPO_DIR)/mcporter/mcporter.json" python3 "$(REPO_DIR)/bin/_mcp.py" status
+
+## mcp-check: Conecta de verdad a cada servidor (sin OAuth) y dice cuantas tools expone
+.PHONY: mcp-check
+mcp-check:
 	@command -v mcporter >/dev/null 2>&1 || { echo "  mcporter no instalado (make mcporter)"; exit 0; }
-	@echo "  MCP (via mcporter):"
-	@for s in $$(python3 -c "import json;print(' '.join(json.load(open('$(REPO_DIR)/mcporter/mcporter.json'))['mcpServers']))"); do \
-		out=$$(mcporter list $$s --status --no-oauth </dev/null 2>&1 | grep -oE "[0-9]+ tools|auth required|HTTP [0-9]+|SSE error[^,)]*|unauthori[a-z]*" | head -1); \
-		case "$$out" in *tools*) echo "    ✅ $$s   $$out";; *) echo "    ○ $$s   sin autenticar ->  mcporter auth $$s";; esac; \
-	done
+	@MCP_CATALOG="$(REPO_DIR)/mcporter/mcporter.json" python3 "$(REPO_DIR)/bin/_mcp.py" check
 
 ## bench-models: Compara modelos con las 4 tareas objetivas (MODEL=... TAG=... AGENT=... para uno solo)
 .PHONY: bench-models

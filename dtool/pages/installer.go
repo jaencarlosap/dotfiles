@@ -15,15 +15,21 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Installer: elige que instalar o ejecutar de lo que hay en el repo y corre
-// los pasos EN ORDEN, cada uno como proceso visible (tea.ExecProcess), asi
-// que los que preguntan —sudo, `gh auth login`, `mcporter auth` con su
-// navegador— se ven y se contestan como en una terminal normal.
+// Installer: elige que instalar y que autenticar, y corre los pasos EN ORDEN,
+// cada uno como proceso visible (tea.ExecProcess), asi que los que preguntan
+// —sudo, `gh auth login`, `mcporter auth` con su navegador— se ven y se
+// contestan como en una terminal normal.
 //
-// Los servidores MCP salen del catalogo versionado (opencode-config/mcporter/
-// mcporter.json) con su estado real (sondeado con --no-oauth: mirar no
-// autentica). Marcas solo los que quieres: cada auth abre el navegador y no
-// todos hacen falta en cada PC.
+// Estructura: pasos de instalacion, y debajo de algunos sus sub-pasos de
+// autenticacion (gh bajo "opencode config"; un `mcporter auth <server>` por
+// cada servidor del catalogo bajo "mcporter"). Marcar un sub-paso marca al
+// padre si su binario aun no esta instalado.
+//
+// REGLA DURA: mirar el estado NUNCA autentica. El estado de cada MCP se lee de
+// ~/.mcporter/credentials.json en local (una entrada con `tokens` = hay
+// sesion). No se llama a mcporter para sondear: `mcporter list --status`, aun
+// con --no-oauth segun version/estado, acabo abriendo el navegador para cada
+// servidor al entrar en esta pagina (2026-09-21, dos veces). Ver installer_test.go.
 
 type installerState int
 
@@ -35,14 +41,16 @@ const (
 )
 
 type installStep struct {
+	key      string // identificador estable: "opencode", "mcporter", "auth:notion"...
+	parent   string // key del paso padre, "" si es de primer nivel
 	title    string
 	desc     string
 	cmd      string // se ejecuta con sh -c desde la raiz del repo
-	group    string // "setup" | "auth" | "maintenance"
+	needs    string // binario que el paso necesita en PATH ("mcporter", "gh"); vacio = ninguno
+	mcp      string // nombre del servidor MCP si el paso es un auth
 	selected bool
 	status   string // "", "running", "done", "failed", "skipped"
 	note     string
-	mcp      string // nombre del servidor MCP si el paso es un auth
 }
 
 type InstallerModel struct {
@@ -53,18 +61,13 @@ type InstallerModel struct {
 	repo     string
 	repoErr  string
 	dryRun   bool
-	mcpState map[string]string // server -> "ok (N tools)" | "pending" | "checking"
-	width    int
+	mcpAuth  map[string]bool // server -> hay tokens guardados (lectura local)
+	credPath string
 }
 
 type installStepDoneMsg struct {
 	index int
 	err   error
-}
-
-type mcpStatusMsg struct {
-	server string
-	status string
 }
 
 var (
@@ -75,29 +78,64 @@ var (
 )
 
 func NewInstallerModel() InstallerModel {
-	m := InstallerModel{mcpState: map[string]string{}}
+	home, _ := os.UserHomeDir()
+	m := InstallerModel{credPath: filepath.Join(home, ".mcporter", "credentials.json")}
 	m.repo, m.repoErr = findRepoRoot()
-	m.steps = []installStep{
-		{group: "setup", title: "opencode config", desc: "symlinks ~/.config/opencode + gh (make install_opencode)", cmd: "make install_opencode"},
-		{group: "setup", title: "mcporter (MCP por bash)", desc: "instala mcporter y enlaza el catalogo de servidores; no autentica nada (make install_mcporter)", cmd: "make install_mcporter"},
-		{group: "setup", title: "herdr", desc: "runtime persistente para agentes: binario, config, integraciones (make install_herdr)", cmd: "make install_herdr"},
-		{group: "setup", title: "Neovim", desc: "Xcode CLT / Homebrew / neovim + nvim-config (make install_nvim YES=1)", cmd: "make install_nvim YES=1"},
-		{group: "auth", title: "GitHub: gh auth login", desc: "una vez por maquina; abre el navegador", cmd: "gh auth login"},
+	m.steps = buildSteps(m.mcpServers())
+	m.mcpAuth = readMCPAuth(m.credPath)
+	return m
+}
+
+// buildSteps arma la lista: cada padre seguido de sus hijos, en el orden en
+// que deben ejecutarse.
+func buildSteps(mcpServers []string) []installStep {
+	steps := []installStep{
+		{key: "opencode", title: "opencode config", desc: "symlinks ~/.config/opencode + gh (make install_opencode)", cmd: "make install_opencode"},
+		{key: "auth:gh", parent: "opencode", needs: "gh", title: "gh auth login", desc: "GitHub, una vez por maquina; abre el navegador", cmd: "gh auth login"},
+		{key: "mcporter", title: "mcporter (MCP por bash)", desc: "instala mcporter y enlaza el catalogo de servidores; NO autentica nada (make install_mcporter)", cmd: "make install_mcporter"},
 	}
-	for _, s := range m.mcpServers() {
-		m.steps = append(m.steps, installStep{
-			group: "auth", mcp: s,
-			title: "MCP auth: " + s,
-			desc:  "mcporter auth " + s + " (abre el navegador; el token queda en ~/.mcporter)",
+	for _, s := range mcpServers {
+		steps = append(steps, installStep{
+			key: "auth:" + s, parent: "mcporter", needs: "mcporter", mcp: s,
+			title: "auth " + s,
+			desc:  "mcporter auth " + s + " — abre el navegador; el token queda en ~/.mcporter",
 			cmd:   "mcporter auth " + s,
 		})
-		m.mcpState[s] = "checking"
 	}
-	m.steps = append(m.steps,
-		installStep{group: "maintenance", title: "Limpieza de disco", desc: "caches de usuario, Go, npm/brew/cargo, Docker sin volumenes (make clean_disk)", cmd: "make clean_disk"},
-		installStep{group: "maintenance", title: "Limpieza de disco (sudo)", desc: "caches de sistema y /private/tmp; pide contraseña (make clean_disk_sudo)", cmd: "make clean_disk_sudo"},
+	steps = append(steps,
+		installStep{key: "herdr", title: "herdr", desc: "runtime persistente para agentes: binario, config, integraciones (make install_herdr)", cmd: "make install_herdr"},
+		installStep{key: "nvim", title: "Neovim", desc: "Xcode CLT / Homebrew / neovim + nvim-config (make install_nvim YES=1)", cmd: "make install_nvim YES=1"},
 	)
-	return m
+	return steps
+}
+
+// readMCPAuth: que servidores tienen sesion guardada, leyendo SOLO el fichero
+// local de credenciales de mcporter. Sin red, sin OAuth, sin navegador.
+func readMCPAuth(credPath string) map[string]bool {
+	out := map[string]bool{}
+	raw, err := os.ReadFile(credPath)
+	if err != nil {
+		return out
+	}
+	var cred struct {
+		Entries map[string]struct {
+			ServerName string          `json:"serverName"`
+			Tokens     json.RawMessage `json:"tokens"`
+		} `json:"entries"`
+	}
+	if json.Unmarshal(raw, &cred) != nil {
+		return out
+	}
+	for key, e := range cred.Entries {
+		name := e.ServerName
+		if name == "" {
+			name = strings.SplitN(key, "|", 2)[0]
+		}
+		if len(e.Tokens) > 0 && string(e.Tokens) != "null" {
+			out[name] = true
+		}
+	}
+	return out
 }
 
 // findRepoRoot: dtool se lanza desde la raiz del repo (make setup) o desde
@@ -148,45 +186,29 @@ func (m InstallerModel) mcpServers() []string {
 // SetDryRun: con --dry-run los pasos solo se listan, no se ejecutan.
 func (m *InstallerModel) SetDryRun(v bool) { m.dryRun = v }
 
-func (m InstallerModel) Init() tea.Cmd {
-	var cmds []tea.Cmd
-	for _, s := range m.steps {
-		if s.mcp != "" {
-			cmds = append(cmds, checkMCP(s.mcp))
-		}
+// Init no lanza nada: todo el estado que se muestra se leyo en local al crear
+// el modelo. (Antes lanzaba sondas de red a mcporter; ver la cabecera.)
+func (m InstallerModel) Init() tea.Cmd { return nil }
+
+func installed(bin string) bool {
+	if bin == "" {
+		return true
 	}
-	return tea.Batch(cmds...)
+	_, err := exec.LookPath(bin)
+	return err == nil
 }
 
-// checkMCP pregunta a mcporter si el servidor ya esta autenticado. Es la
-// misma comprobacion de `make mcp-status`, en paralelo y sin bloquear la TUI.
-func checkMCP(server string) tea.Cmd {
-	return func() tea.Msg {
-		if _, err := exec.LookPath("mcporter"); err != nil {
-			return mcpStatusMsg{server: server, status: "mcporter no instalado (marca antes 'mcporter (MCP por bash)')"}
+func (m InstallerModel) indexOf(key string) int {
+	for i, s := range m.steps {
+		if s.key == key {
+			return i
 		}
-		// --no-oauth: sin el, en una maquina sin token esta sonda ABRIA EL
-		// NAVEGADOR para cada servidor al entrar en la pagina (visto el 2026-09-21).
-		out, _ := runner.Run("mcporter", "list", server, "--status", "--no-oauth")
-		for _, line := range strings.Split(out, "\n") {
-			if i := strings.Index(line, " tools"); i > 0 {
-				start := strings.LastIndex(line[:i], "(")
-				if start >= 0 {
-					return mcpStatusMsg{server: server, status: "ok (" + line[start+1:i] + " tools)"}
-				}
-				return mcpStatusMsg{server: server, status: "ok"}
-			}
-		}
-		return mcpStatusMsg{server: server, status: "pending"}
 	}
+	return -1
 }
 
 func (m InstallerModel) Update(msg tea.Msg) (InstallerModel, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-	case mcpStatusMsg:
-		m.mcpState[msg.server] = msg.status
 	case installStepDoneMsg:
 		if msg.err != nil {
 			m.steps[msg.index].status = "failed"
@@ -214,11 +236,31 @@ func (m InstallerModel) Update(msg tea.Msg) (InstallerModel, tea.Cmd) {
 			case "enter", "r":
 				fresh := NewInstallerModel()
 				fresh.dryRun = m.dryRun
-				return fresh, fresh.Init()
+				return fresh, nil
 			}
 		}
 	}
 	return m, nil
+}
+
+// toggle marca/desmarca un paso. Marcar un hijo cuyo binario no esta
+// instalado marca tambien al padre (que es quien lo instala); desmarcar un
+// padre desmarca a sus hijos.
+func (m *InstallerModel) toggle(i int) {
+	s := &m.steps[i]
+	s.selected = !s.selected
+	if s.selected && s.parent != "" && !installed(s.needs) {
+		if p := m.indexOf(s.parent); p >= 0 {
+			m.steps[p].selected = true
+		}
+	}
+	if !s.selected && s.parent == "" {
+		for j := range m.steps {
+			if m.steps[j].parent == s.key {
+				m.steps[j].selected = false
+			}
+		}
+	}
 }
 
 func (m InstallerModel) updateSelect(msg tea.KeyMsg) (InstallerModel, tea.Cmd) {
@@ -232,7 +274,7 @@ func (m InstallerModel) updateSelect(msg tea.KeyMsg) (InstallerModel, tea.Cmd) {
 			m.cursor++
 		}
 	case " ", "x":
-		m.steps[m.cursor].selected = !m.steps[m.cursor].selected
+		m.toggle(m.cursor)
 	case "a":
 		all := true
 		for _, s := range m.steps {
@@ -245,17 +287,16 @@ func (m InstallerModel) updateSelect(msg tea.KeyMsg) (InstallerModel, tea.Cmd) {
 			m.steps[i].selected = !all
 		}
 	case "p":
-		// solo lo pendiente: setup + auths sin token
+		// solo lo pendiente: instalaciones + gh si no hay sesion. Los auth de
+		// MCP NO: cada uno abre el navegador y se eligen a mano.
 		for i := range m.steps {
 			s := &m.steps[i]
 			switch {
-			case s.group == "setup":
+			case s.parent == "":
 				s.selected = true
-			case s.mcp != "":
-				s.selected = m.mcpState[s.mcp] == "pending"
-			case s.cmd == "gh auth login":
+			case s.key == "auth:gh":
 				_, err := runner.Run("gh", "auth", "status")
-				s.selected = err != nil
+				s.selected = installed("gh") && err != nil
 			default:
 				s.selected = false
 			}
@@ -287,6 +328,7 @@ func (m InstallerModel) updateSelect(msg tea.KeyMsg) (InstallerModel, tea.Cmd) {
 func (m InstallerModel) runNext() (InstallerModel, tea.Cmd) {
 	if len(m.queue) == 0 {
 		m.state = installerDone
+		m.mcpAuth = readMCPAuth(m.credPath)
 		return m, nil
 	}
 	idx := m.queue[0]
@@ -318,14 +360,9 @@ func (m InstallerModel) View() string {
 	}
 	b.WriteString(descStyle.Render("Repo: " + m.repo))
 	b.WriteString("\n\n")
-	lastGroup := ""
+	b.WriteString(instGroupStyle.Render("Instalar / autenticar (los sub-pasos abren el navegador)"))
+	b.WriteString("\n")
 	for i, s := range m.steps {
-		if s.group != lastGroup {
-			lastGroup = s.group
-			label := map[string]string{"setup": "Instalar", "auth": "Autenticar (abre el navegador)", "maintenance": "Mantenimiento"}[s.group]
-			b.WriteString(instGroupStyle.Render(label))
-			b.WriteString("\n")
-		}
 		box := "[ ]"
 		if s.selected {
 			box = "[x]"
@@ -339,31 +376,37 @@ func (m InstallerModel) View() string {
 		case "failed":
 			state = instFailStyle.Render("  ❌ " + firstLine(s.note))
 		case "skipped":
-			state = descStyle.Render(firstLine(s.note))
+			state = descStyle.Render("  " + firstLine(s.note))
 		}
 		if s.mcp != "" {
-			switch st := m.mcpState[s.mcp]; {
-			case strings.HasPrefix(st, "ok"):
-				state += instOKStyle.Render("  ya autenticado " + strings.TrimPrefix(st, "ok "))
-			case st == "pending":
+			if m.mcpAuth[s.mcp] {
+				state += instOKStyle.Render("  sesion guardada")
+			} else {
 				state += instWarnStyle.Render("  sin autenticar")
-			case st == "checking":
-				state += descStyle.Render("  comprobando...")
-			default:
-				state += instFailStyle.Render("  " + st)
 			}
 		}
-		line := fmt.Sprintf("%s %s%s", box, s.title, state)
+		if s.needs != "" && !installed(s.needs) {
+			state += descStyle.Render("  (instala antes el padre; se marca solo)")
+		}
+		indent := ""
+		if s.parent != "" {
+			indent = "    └ "
+		}
+		line := fmt.Sprintf("%s%s %s%s", indent, box, s.title, state)
 		if i == m.cursor && m.state == installerSelect {
 			b.WriteString(selectedStyle.Render("› " + line))
 		} else {
 			b.WriteString(normalStyle.Render("  " + line))
 		}
 		b.WriteString("\n")
-		b.WriteString(descStyle.Render(s.desc))
-		b.WriteString("\n")
+		if s.parent == "" {
+			b.WriteString(descStyle.Render(s.desc))
+			b.WriteString("\n")
+		}
 	}
 	b.WriteString("\n")
+	b.WriteString(descStyle.Render("La limpieza de disco esta en System Cleaner (menu principal) o make clean_disk."))
+	b.WriteString("\n\n")
 	switch m.state {
 	case installerConfirm:
 		b.WriteString(instGroupStyle.Render("Se va a ejecutar, en este orden:"))
@@ -375,7 +418,7 @@ func (m InstallerModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(instWarnStyle.Render("  y/enter ejecutar · n volver a la lista"))
 	case installerSelect:
-		b.WriteString(descStyle.Render("space/x marcar · a todo/nada · p solo lo pendiente · enter revisar y confirmar · esc volver"))
+		b.WriteString(descStyle.Render("space/x marcar · a todo/nada · p lo pendiente (sin auth de MCP) · enter revisar y confirmar · esc volver"))
 	case installerRunning:
 		b.WriteString(instWarnStyle.Render("  ejecutando... (cada paso se muestra en la terminal; Enter al terminar cada uno)"))
 	case installerDone:

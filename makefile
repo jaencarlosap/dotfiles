@@ -1,4 +1,4 @@
-.PHONY: help setup setup_dry dtool_release install_nvim clean_system clean_system_dry clean_disk clean_disk_dry clean_disk_sudo \
+.PHONY: help setup setup_dry dtool_test dtool_release install_nvim clean_system clean_system_dry clean_disk clean_disk_dry clean_disk_sudo \
 	dtool install_dtool install_opencode uninstall_opencode opencode_status \
 	install_herdr uninstall_herdr herdr_status install_mcporter
 
@@ -26,8 +26,12 @@ setup_dry:
 	@test -x "$(DTOOL_BIN)" || { echo "no hay binario para $(DTOOL_OS)/$(DTOOL_ARCH) en dtool/bin/"; exit 1; }
 	@"$(DTOOL_BIN)" --page installer --dry-run
 
-## dtool_release: Recompila los binarios versionados (darwin amd64/arm64, linux amd64) — correr tras cambiar dtool/
-dtool_release:
+## dtool_test: Tests de dtool (el instalador nunca debe lanzar mcporter al navegar, etc.)
+dtool_test:
+	@cd dtool && go test ./... 2>&1 | tail -3
+
+## dtool_release: Tests + recompila los binarios versionados (darwin amd64/arm64, linux amd64) — correr tras cambiar dtool/
+dtool_release: dtool_test
 	@cd dtool && for t in darwin/amd64 darwin/arm64 linux/amd64; do \
 		CGO_ENABLED=0 GOOS=$${t%/*} GOARCH=$${t#*/} go build -trimpath -ldflags="-s -w" -o bin/dtool-$${t%/*}-$${t#*/} . && echo "  built dtool/bin/dtool-$${t%/*}-$${t#*/}"; done
 

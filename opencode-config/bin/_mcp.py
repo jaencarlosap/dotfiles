@@ -4,6 +4,7 @@ testearlo directo: MCP_MCPORTER_BIN apunta a un mcporter falso en los tests."""
 import fnmatch
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import time
 
 HOME = os.path.expanduser("~")
 CATALOG = os.environ.get("MCP_CATALOG", f"{HOME}/.mcporter/mcporter.json")
+CREDENTIALS = os.environ.get("MCP_CREDENTIALS", f"{HOME}/.mcporter/credentials.json")
 POLICY = os.environ.get("MCP_POLICY", os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "mcporter", "policy.json"))
 MAX_CHARS = int(os.environ.get("MCP_MAX_CHARS", "6000"))
 CACHE_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "mcp-sh-cache")
@@ -26,7 +28,8 @@ USAGE = """mcp.sh — every MCP server you have, as commands. Run with bash.
   mcp.sh describe <server>.<tool>      one tool in full: parameters, types, what each means
   mcp.sh call <server>.<tool> k=v ...  run a read tool  (key=value; strings with spaces: key="a b"; key=@file)
   mcp.sh call --write <server>.<tool> k=v ...   run a tool that creates/changes/sends (asks the user first)
-  mcp.sh status [server]               connect and report: authenticated? how many tools?
+  mcp.sh status                        which servers have a saved login (local file; never opens a browser)
+  mcp.sh check [server]                connect for real (no OAuth) and report how many tools each exposes
 
 Rules: the output is the fact — ids, URLs and numbers come from it, never from
 you. A tool `tools` does not list cannot be called. If a call says
@@ -443,11 +446,39 @@ def cmd_call(a):
         print()
 
 
-def cmd_status(a):
-    r = run(["list", *a[:1], "--status", "--no-oauth"])
-    lines = [l for l in (r.stdout + r.stderr).splitlines() if l.strip()]
-    print("\n".join(lines[-20:]))
-    sys.exit(r.returncode)
+def saved_logins():
+    """Servidores con sesion guardada, leyendo SOLO ~/.mcporter/credentials.json.
+    Sondear por red (`mcporter list --status`) llego a arrancar el OAuth de cada
+    servidor en una maquina nueva: mirar no debe autenticar."""
+    out = set()
+    try:
+        with open(CREDENTIALS) as f:
+            cred = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return out
+    for key, e in (cred.get("entries") or {}).items():
+        if isinstance(e, dict) and e.get("tokens"):
+            out.add(e.get("serverName") or key.split("|", 1)[0])
+    return out
+
+
+def cmd_status(_):
+    auth = saved_logins()
+    print("  MCP (via mcporter):")
+    for s in servers():
+        if s in auth:
+            print(f"    ✅ {s:12} sesion guardada")
+        else:
+            print(f"    ○  {s:12} sin autenticar ->  mcporter auth {s}")
+
+
+def cmd_check(a):
+    names = a[:1] or list(servers())
+    for s in names:
+        r = run(["list", s, "--status", "--no-oauth"])
+        text = r.stdout + r.stderr
+        m = re.search(r"(\d+) tools|auth required|HTTP \d+|unauthori[a-z]*", text)
+        print(f"    {s}: {m.group(0) if m else 'sin respuesta'}")
 
 
 def main(argv):
@@ -455,7 +486,7 @@ def main(argv):
         print(USAGE)
         return
     cmd, a = argv[0], argv[1:]
-    fn = {"list": cmd_list, "tools": cmd_tools, "describe": cmd_describe, "call": cmd_call, "status": cmd_status}.get(cmd)
+    fn = {"list": cmd_list, "tools": cmd_tools, "describe": cmd_describe, "call": cmd_call, "status": cmd_status, "check": cmd_check}.get(cmd)
     if not fn:
         die(USAGE)
     fn(a)

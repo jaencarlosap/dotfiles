@@ -26,7 +26,8 @@ El repo es la **fuente de verdad**. `make install` reemplaza los archivos en
 ```bash
 make install       # symlinks de la config (respalda lo previo) + gh. NO toca mcporter
 make mcporter      # mcporter + enlace del catalogo MCP; no autentica nada (eso: mcporter auth <server>)
-make mcp-status    # cada servidor MCP: autenticado? cuantas tools? (con --no-oauth: nunca abre el navegador)
+make mcp-status    # que servidores MCP tienen sesion guardada (lee ~/.mcporter/credentials.json; nunca abre el navegador)
+make mcp-check     # conecta de verdad (sin OAuth) y dice cuantas tools expone cada uno
 make status        # ver estado de los symlinks
 make test-conn     # ping al server de modelos en pcgamer
 make models        # lista modelos disponibles
