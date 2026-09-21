@@ -16,7 +16,7 @@ web.sh read <url>                     # that page as plain text
 mcp.sh list                           # every external service you can reach right now (documents, tickets, data...)
 mcp.sh tools <server> <word>          # what a server can do, filtered by a word (search, page, quote...); [write] = changes things
 mcp.sh describe <server>.<tool>       # one tool in full, when the signature is not enough
-mcp.sh call <server>.<tool> k=v ...   # read; JSON values with k:='{...}', files with k=@path
+mcp.sh call <server>.<tool> k=v ...   # read; JSON values with k:='{...}' (mcp.sh fixes k= for object/array params), files with k=@path
 mcp.sh call --write <server>.<tool> … # create/update/send — the user confirms the exact command
 gh pr view|diff|checks|list           # GitHub, read side; also gh issue view|list, gh run list|view
 ```
@@ -42,3 +42,21 @@ Rules that apply to all of them:
   confirmation, do not ask twice in prose.
 - Any MCP tool that does appear in your tool list (`<server>_<tool>`) is
   connected right now: call it, never say none is configured.
+
+## When a command fails
+
+1. **Read the error literally.** Servers name the field, the missing key, the
+   valid values ("Property X not found. All editable property keys: ..."). The
+   fix is usually inside the message.
+2. **Suspect your call before the tool.** Check `mcp.sh describe <server>.<tool>`:
+   is the parameter an object/array (then `k:='{...}'`)? Are those the exact
+   property names? Did you put a key at the wrong level?
+3. **Isolate with the smallest call** that changes one thing. Two attempts, each
+   with a different hypothesis. The same error twice → stop and report its
+   exact text; do not try a third variation.
+4. **"Known bug" is a claim that needs a source you fetched this session**
+   (`web.sh read` of the issue) and that matches THIS server — a hosted MCP
+   and an open-source local server are different products. Never quote issue
+   numbers from memory.
+5. **Report what happened, not a verdict:** the command, the exact error, what
+   you changed, what stays unverified. "The MCP is broken" is not a finding.

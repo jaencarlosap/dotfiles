@@ -836,6 +836,8 @@ J
 fi
 if [ "$1" = "call" ]; then
   if [ "$2" = "locked.x" ]; then echo "Unauthorized: OAuth required" >&2; exit 1; fi
+  if [ "$2" = "notion.notion-fetch" ]; then echo '{"status":400,"code":"validation_error","message":"Property \"Name\" not found in the data source. All editable property keys: \"Notes\" (type: title)"}' >&2; exit 1; fi
+  case "$3" in *received*string*) echo "Input validation error: pages.0: Unrecognized key: parent; expected object, received string" >&2; exit 1;; esac
   echo "CALLED $2 ARGS: $3 $4"; exit 0
 fi
 echo "unknown" >&2; exit 1
@@ -878,6 +880,13 @@ echo "unknown" >&2; exit 1
     const w2 = mcp("call", "--write", "notion.notion-create-pages", "pages:=[]")
     if (w2.rc !== 0 || !w2.out.includes("CALLED notion.notion-create-pages")) throw new Error(w2.out)
   })
+  await t("call: k=<json> en un parametro object/array se manda tipado (k:=), lo demas intacto", async () => {
+    const r = mcp("call", "--write", "notion.notion-create-pages", 'pages=[{"properties":{"Notes":"x"}}]', "creation_mode=draft")
+    if (r.rc !== 0) throw new Error(r.out)
+    if (!r.out.includes('ARGS: pages:=[{"properties":{"Notes":"x"}}] creation_mode=draft')) throw new Error("no convirtio: " + r.out)
+    const r2 = mcp("call", "notion.notion-search", "query={not json", "page_size=3")
+    if (!r2.out.includes("ARGS: query={not json page_size:=3")) throw new Error("toco un string o no tipo el integer: " + r2.out)
+  })
   await t("call: deny se bloquea aunque lleve --write (quantfury.placeOrder, rc 2)", async () => {
     const r = mcp("call", "--write", "quantfury.placeOrder", "symbol=BTC")
     if (r.rc !== 2 || !r.out.includes("BLOCKED by policy")) throw new Error(r.rc + " " + r.out)
@@ -896,6 +905,12 @@ echo "unknown" >&2; exit 1
     if (r.rc === 0 || !r.out.includes("mcporter auth locked")) throw new Error(r.out)
     const c = mcp("call", "locked.x")
     if (c.rc === 0 || !c.out.includes("mcporter auth locked")) throw new Error(c.out)
+  })
+  await t("errores del servidor -> pista accionable, nunca 'el MCP esta roto'", async () => {
+    const r = mcp("call", "notion.notion-fetch", "id=x")
+    if (r.rc === 0 || !r.out.includes("property names") || !r.out.includes("not always 'Name'")) throw new Error(r.out)
+    const r2 = mcp("call", "notion.notion-search", "query=received string")
+    if (r2.rc === 0 || !r2.out.includes("argument error, not a server bug")) throw new Error(r2.out)
   })
   await t("servidor o formato desconocido -> error util, no traza", async () => {
     const r = mcp("call", "nope.tool")

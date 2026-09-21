@@ -185,6 +185,56 @@ def cmd_describe(a):
         print("    (none)")
 
 
+JSONISH = ("object", "array", "boolean", "integer", "number")
+
+
+def coerce_args(server, tool, rest):
+    """`k=v` manda v como TEXTO; `k:=v` como JSON. Un modelo pequeno confunde
+    las dos y el servidor contesta "expected object, received string" — eso se
+    leyo como "el MCP esta roto" en un PC. Aqui se mira el esquema de la tool:
+    si el parametro es object/array/boolean/number y el valor parsea como JSON,
+    se manda tipado. Lo que ya viene con := , @fichero o --args no se toca."""
+    try:
+        tools = tools_json(server).get("tools") or []
+        schema = next((x for x in tools if x["name"] == tool), {}).get("inputSchema") or {}
+        props = schema.get("properties") or {}
+    except SystemExit:
+        return rest, []
+    fixed, notes = [], []
+    for arg in rest:
+        if "=" in arg and not arg.startswith("-") and ":=" not in arg:
+            k, val = arg.split("=", 1)
+            typ = (props.get(k) or {}).get("type")
+            if isinstance(typ, list):
+                typ = next((x for x in typ if x != "null"), None)
+            if typ in JSONISH and not val.startswith("@"):
+                try:
+                    json.loads(val)
+                    fixed.append(f"{k}:={val}")
+                    notes.append(k)
+                    continue
+                except json.JSONDecodeError:
+                    pass
+        fixed.append(arg)
+    return fixed, notes
+
+
+def error_hints(server, tool, out):
+    low = out.lower()
+    hints = []
+    if "unauthori" in low or "401" in low or "oauth" in low or "needs auth" in low:
+        hints.append(f"the user must run once:  mcporter auth {server}")
+    if "received string" in low or "expected object" in low or "expected array" in low or "unrecognized key" in low:
+        hints.append("a JSON parameter was sent as text or in the wrong place: pass objects/arrays as k:='{...}' at top level "
+                     f"(see mcp.sh describe {server}.{tool}); this is an argument error, not a server bug")
+    if "not found in the data source" in low or "property" in low and "not found" in low:
+        hints.append("the database has its own property names: the error above lists the valid ones; the title property is not always 'Name'. "
+                     "Fetch the collection:// first and use those exact keys")
+    if "validation_error" in low and not hints:
+        hints.append("the server rejected the arguments: read the message above literally, it names the field. Fix the call; do not conclude the tool is broken")
+    return hints
+
+
 def cmd_call(a):
     write = False
     if a and a[0] == "--write":
@@ -197,14 +247,16 @@ def cmd_call(a):
         die(f"BLOCKED by policy: {s}.{t} is not available from here. See what is: mcp.sh tools {s}", 2)
     if v == "write-required":
         die(f"{s}.{t} changes things. Re-run as:  mcp.sh call --write {s}.{t} {' '.join(rest)}   (the user will be asked to confirm)", 3)
+    rest, coerced = coerce_args(s, t, rest)
     r = run(["call", f"{s}.{t}", *rest, "--output", "text"])
     if r.returncode != 0:
         out = (r.stderr or "") + (r.stdout or "")
         msg = f"{s}.{t} failed (exit {r.returncode}):\n" + "\n".join(out.strip().splitlines()[-8:])
-        low = out.lower()
-        if "unauthori" in low or "401" in low or "oauth" in low or "needs auth" in low:
-            msg += f"\n-> the user must run once:  mcporter auth {s}"
+        for h in error_hints(s, t, out):
+            msg += f"\n-> {h}"
         die(msg, r.returncode)
+    if coerced:
+        print(f"[mcp.sh] sent as JSON (schema says object/array/number): {', '.join(coerced)} — next time write k:=...", file=sys.stderr)
     sys.stdout.write(clip(r.stdout))
     if not r.stdout.endswith("\n"):
         print()
