@@ -1,4 +1,4 @@
-.PHONY: help setup setup_dry install_nvim clean_system clean_system_dry clean_disk clean_disk_dry clean_disk_sudo \
+.PHONY: help setup setup_dry dtool_release install_nvim clean_system clean_system_dry clean_disk clean_disk_dry clean_disk_sudo \
 	dtool install_dtool install_opencode uninstall_opencode opencode_status \
 	install_herdr uninstall_herdr herdr_status
 
@@ -8,13 +8,28 @@
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /'
 
-## setup: Instalador interactivo (dtool): elige que instalar, que autenticar (gh, cada MCP) y que ejecutar, en orden
-setup: dtool
-	@./dtool/dtool --page installer
+# dtool viene COMPILADO en el repo (dtool/bin/dtool-<os>-<arch>) para que una
+# maquina nueva no necesite Go ni descargar nada: `make setup` elige el binario
+# por `uname`. `make dtool` compila el local (desarrollo) y `make dtool_release`
+# regenera los tres binarios versionados tras tocar dtool/.
+DTOOL_OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+DTOOL_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+DTOOL_BIN  := dtool/bin/dtool-$(DTOOL_OS)-$(DTOOL_ARCH)
+
+## setup: Instalador interactivo (dtool precompilado): elige que instalar, que autenticar (gh, cada MCP) y que ejecutar, en orden
+setup:
+	@test -x "$(DTOOL_BIN)" || { echo "no hay binario para $(DTOOL_OS)/$(DTOOL_ARCH) en dtool/bin/; con Go: make dtool && ./dtool/dtool --page installer"; exit 1; }
+	@"$(DTOOL_BIN)" --page installer
 
 ## setup_dry: El instalador sin ejecutar nada (lista los comandos que correria)
-setup_dry: dtool
-	@./dtool/dtool --page installer --dry-run
+setup_dry:
+	@test -x "$(DTOOL_BIN)" || { echo "no hay binario para $(DTOOL_OS)/$(DTOOL_ARCH) en dtool/bin/"; exit 1; }
+	@"$(DTOOL_BIN)" --page installer --dry-run
+
+## dtool_release: Recompila los binarios versionados (darwin amd64/arm64, linux amd64) — correr tras cambiar dtool/
+dtool_release:
+	@cd dtool && for t in darwin/amd64 darwin/arm64 linux/amd64; do \
+		CGO_ENABLED=0 GOOS=$${t%/*} GOARCH=$${t#*/} go build -trimpath -ldflags="-s -w" -o bin/dtool-$${t%/*}-$${t#*/} . && echo "  built dtool/bin/dtool-$${t%/*}-$${t#*/}"; done
 
 # Los scripts de shell viven en scripts/ y son los que usan estos targets.
 # dtool/ (TUI en Go) es la version interactiva de los mismos flujos, no un
@@ -52,9 +67,9 @@ clean_disk_sudo:
 dtool:
 	cd dtool && go build -o dtool .
 
-install_dtool: dtool
+install_dtool:
 	mkdir -p $(HOME)/.local/bin
-	cp dtool/dtool $(HOME)/.local/bin/dtool
+	cp "$(DTOOL_BIN)" $(HOME)/.local/bin/dtool
 	@echo "Installed to $(HOME)/.local/bin/dtool — make sure that dir is on your PATH."
 
 # herdr: runtime persistente para los agentes (tmux para agentes). Binario por
