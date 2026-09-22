@@ -116,6 +116,39 @@ lista, deja el ticket en fichero y no lo sube (ya lo contemplaba).
   `tui.json`; su plugin usa globales de Bun y exporta una factory con nombre,
   asi que los tests de carga de `test/plugins.mjs` lo rechazarian.
 
+## 🔐 "Ya autentique y me vuelve a pedir auth cada vez que cambio de modelo" — 2026-09-22
+
+El diagnostico es del codigo de mcporter, no de sintomas:
+
+- La credencial se guarda bajo `nombre|sha256({name,url,command})[:16]`
+  (`dist/oauth-vault.js`), asi que **depende del nombre Y de la url exactos**.
+  Autenticar por URL (`mcporter auth https://mcp.notion.com/mcp`) crea un
+  servidor ad-hoc (`mcp-notion-com-mcp`) y guarda el token bajo OTRA clave: por
+  nombre sigue "sin autenticar". Cambiar la url de un servidor **retira** sus
+  credenciales a proposito.
+- El fichero es `$XDG_DATA_HOME/mcporter/credentials.json` si esa variable es
+  absoluta, si no `~/.mcporter/credentials.json`
+  (`dist/runtime/environment.js`): si una shell la define y otra no, miran
+  vaults distintos.
+
+Para no adivinar: **`mcp.sh doctor`** imprime el vault en uso, el catalogo y,
+por servidor, su url, la clave esperada (calculada con el mismo sha256) y el
+estado (`ok`, `sin token`, `entrada sin tokens (OAuth a medias)`, `token
+guardado bajo otra clave`), mas las entradas huerfanas. `mcp.sh status` avisa
+del caso "auth por URL" en una linea.
+
+**Pero con `doctor` diciendo `ok` seguia pasando, y la causa era otra: el
+agente ejecutaba `mcporter auth` por su cuenta.** El mensaje de error le daba
+el comando, `bash` estaba en `allow`, y cada sesion nueva (p.ej. al cambiar de
+modelo) volvia a intentarlo: se abria el navegador y parecia que el token se
+habia perdido. Arreglo por los dos lados:
+
+- `permission.bash`: `mcporter auth *`, `mcporter config login *` y
+  `gh auth login*` en **ask** — un login lo aprueba el usuario, siempre.
+- Los mensajes de `mcp.sh` y la regla de `tools.md` ahora dicen *"ask the USER
+  to run it; never run it yourself: it opens their browser and blocks"*, con
+  test que lo verifica.
+
 ## 🔎 Cuanto cuesta un turno de `auto`, medido pieza por pieza — 2026-09-22
 
 Con un proxy delante de llama.cpp capturando la peticion real y

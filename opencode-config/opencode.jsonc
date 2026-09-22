@@ -84,7 +84,10 @@
       "gh release *": "ask",
       "gh api -X *": "ask",
       "gh api --method *": "ask",
-      "mcp.sh call --write *": "ask"
+      "mcp.sh call --write *": "ask",
+      "mcporter auth *": "ask",
+      "mcporter config login *": "ask",
+      "gh auth login*": "ask"
     },
     "read": {
       "*": "allow",

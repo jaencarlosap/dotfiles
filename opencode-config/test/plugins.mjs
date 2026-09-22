@@ -939,11 +939,11 @@ echo "unknown" >&2; exit 1
     if (!r.out.includes(`mcp.sh call --write notion.notion-create-pages pages:='[{"properties": {"<name>": "<value>"}, "content": "<content>"}]'`)) throw new Error("sin ejemplo: " + r.out)
     if (mcp("describe", "notion.notion-spawn-session").rc === 0) throw new Error("describe mostro una tool deny")
   })
-  await t("auth pendiente -> dice exactamente que correr", async () => {
+  await t("auth pendiente -> se lo pide al USUARIO y prohibe ejecutarlo (abre su navegador)", async () => {
     const r = mcp("tools", "locked")
-    if (r.rc === 0 || !r.out.includes("mcporter auth locked")) throw new Error(r.out)
+    if (r.rc === 0 || !r.out.includes("mcporter auth locked") || !/never run it yourself/i.test(r.out)) throw new Error(r.out)
     const c = mcp("call", "locked.x")
-    if (c.rc === 0 || !c.out.includes("mcporter auth locked")) throw new Error(c.out)
+    if (c.rc === 0 || !c.out.includes("mcporter auth locked") || !/never run it yourself/i.test(c.out)) throw new Error(c.out)
   })
   await t("errores del servidor -> pista accionable, nunca 'el MCP esta roto'", async () => {
     const r = mcp("call", "notion.notion-fetch", "id=x")

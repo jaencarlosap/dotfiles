@@ -27,8 +27,10 @@ Rules that apply to all of them:
   one `mcp.sh call` printed; the ticket key is the one the server returned; the
   PR number is what `gh` said. Never type one yourself, never reconstruct one.
 - **If a command fails, report its error line.** Do not retry with a guessed
-  URL, id or flag. `unauthorized` means the user has to log in once
-  (`mcporter auth <server>`, `gh auth login`): say exactly that.
+  URL, id or flag. `unauthorized` means the user has to log in once: say
+  exactly that and stop. **Never run an auth/login command yourself**
+  (`mcporter auth …`, `gh auth login`): it opens the user's browser and blocks,
+  and it never fixes an argument error.
 - **Writes take the full text.** To save something (a page, a ticket, a
   note) put the whole content in the call — from a file with `k=@path` when
   it is long — never a summary of it.

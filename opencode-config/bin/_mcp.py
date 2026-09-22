@@ -41,7 +41,8 @@ USAGE = """mcp.sh — every MCP server you have, as commands. Run with bash.
 
 Rules: the output is the fact — ids, URLs and numbers come from it, never from
 you. A tool `tools` does not list cannot be called. If a call says
-"unauthorized" or "needs auth", the user must run `mcporter auth <server>` once.
+"unauthorized" or "needs auth", ASK THE USER to run `mcporter auth <server>`
+once — never run that yourself: it opens their browser and blocks waiting.
 """
 
 
@@ -97,7 +98,8 @@ def tools_json(server):
     try:
         d = json.loads(r.stdout)
     except json.JSONDecodeError:
-        die(f"{server}: mcporter did not return tools:\n{(r.stderr or r.stdout).strip()[-600:]}\nIf it needs login: mcporter auth {server}")
+        die(f"{server}: mcporter did not return tools:\n{(r.stderr or r.stdout).strip()[-600:]}\n"
+            f"If it needs login, ask the USER to run `mcporter auth {server}` — never run it yourself, it opens their browser.")
     if d.get("tools"):
         with open(f, "w") as fh:
             json.dump(d, fh)
@@ -158,7 +160,8 @@ def cmd_tools(a):
     d = tools_json(server)
     tools = d.get("tools") or []
     if not tools:
-        die(f"{server}: no tools returned (status: {d.get('status', '?')}). If it needs login: mcporter auth {server}")
+        die(f"{server}: no tools returned (status: {d.get('status', '?')}). If it needs login, ask the USER to run "
+            f"`mcporter auth {server}` — never run it yourself, it opens their browser.")
     p, _ = policy_for(server)
     shown = hidden = 0
     for t in tools:
