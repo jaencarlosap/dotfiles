@@ -2,7 +2,7 @@
 // ticket-format — arregla la numeracion de las secciones del ticket de Jira.
 //
 // El modelo escribe bien las 6 secciones pero se equivoca al NUMERARLAS: en
-// varias pruebas puso `h3. 5.` dos veces, dejando la Documentacion como 5 en
+// varias pruebas puso `## 5.` dos veces, dejando la Documentacion como 5 en
 // vez de 6. Se intento arreglar por prompt (una lista de auto-repaso con los
 // errores reales) y NO se corrigio: es un fallo mecanico, de los que un modelo
 // pequeño no ve al releerse.
@@ -13,13 +13,17 @@
 // imponer, no se pide.
 //
 // MUY IMPORTANTE: este hook ve la salida de TODOS los agentes, asi que solo
-// toca texto que es inequivocamente un ticket (tiene `h3. Titulo:` y al menos
-// tres cabeceras `h3. N.`). Cualquier otra cosa se devuelve intacta.
+// toca texto que es inequivocamente un ticket (tiene `# Titulo:` y al menos
+// tres cabeceras `## N.`). Cualquier otra cosa se devuelve intacta.
+//
+// 2026-09-21: el ticket paso de Jira wiki markup (`h3. N.`) a Markdown
+// (`## N.`); el Atlassian MCP toma Markdown. La regla es la misma.
 //
 // Kill switch:  OPENCODE_TICKETFMT_OFF=1
 // ─────────────────────────────────────────────────────────────────────────
 
-const SECTION = /^h3\. \d+\.\s/gm
+const SECTION = /^## \d+\.\s/gm
+const TITLE = "# Titulo:"
 
 // Devuelve el texto renumerado, o null si no hay nada que hacer (o si esto no
 // es un ticket). Un solo sitio para la regla, porque ahora se aplica en DOS
@@ -29,11 +33,11 @@ const SECTION = /^h3\. \d+\.\s/gm
 // factory y lo invoca con su PluginInput — exportar un helper tumba el modulo
 // entero en el arranque (paso de verdad con anti-slop-guard).
 function renumber(text: unknown): string | null {
-  if (typeof text !== "string" || !text.includes("h3. Titulo:")) return null
+  if (typeof text !== "string" || !text.includes(TITLE)) return null
   const matches = text.match(SECTION)
   if (!matches || matches.length < 3) return null
   let n = 0
-  const fixed = text.replace(SECTION, () => `h3. ${++n}. `)
+  const fixed = text.replace(SECTION, () => `## ${++n}. `)
   return fixed === text ? null : fixed
 }
 
@@ -48,10 +52,10 @@ export default (async () => {
     // El ticket ya no vive solo en el chat: la skill `jira-ticket` lo escribe en
     // `ticket-<algo>.md` para que el usuario lo lea y lo confirme. Sin esto, el
     // renumerado se aplicaba al texto del chat y el FICHERO —que es el que se
-    // lee y el que acaba en Jira— se quedaba con el `h3. 5.` duplicado.
+    // lee y el que acaba en Jira— se quedaba con el `## 5.` duplicado.
     //
     // `write` lleva el contenido entero, asi que se puede renumerar entero.
-    // `edit` solo si su `newString` es el ticket COMPLETO (lleva `h3. Titulo:`):
+    // `edit` solo si su `newString` es el ticket COMPLETO (lleva `# Titulo:`):
     // renumerar un fragmento desde 1 convertiria la seccion 5 en la 1.
     "tool.execute.before": async (input: any, output: any) => {
       if (process.env.OPENCODE_TICKETFMT_OFF === "1") return

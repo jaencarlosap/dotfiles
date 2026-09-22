@@ -2,6 +2,7 @@
 """Logica de mcp.sh (ver bin/mcp.sh para el porque). Un solo fichero para poder
 testearlo directo: MCP_MCPORTER_BIN apunta a un mcporter falso en los tests."""
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -12,7 +13,13 @@ import time
 
 HOME = os.path.expanduser("~")
 CATALOG = os.environ.get("MCP_CATALOG", f"{HOME}/.mcporter/mcporter.json")
-CREDENTIALS = os.environ.get("MCP_CREDENTIALS", f"{HOME}/.mcporter/credentials.json")
+# Donde mcporter guarda los tokens: $XDG_DATA_HOME/mcporter si esta definido y
+# es absoluto, si no ~/.mcporter (mcporter dist/runtime/environment.js). Si una
+# invocacion tiene XDG_DATA_HOME y otra no, miran vaults distintos y parece que
+# el auth "se pierde".
+_XDG = os.environ.get("XDG_DATA_HOME", "")
+_VAULT_DIR = os.path.join(_XDG, "mcporter") if os.path.isabs(_XDG) else os.path.join(HOME, ".mcporter")
+CREDENTIALS = os.environ.get("MCP_CREDENTIALS", os.path.join(_VAULT_DIR, "credentials.json"))
 POLICY = os.environ.get("MCP_POLICY", os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "mcporter", "policy.json"))
 MAX_CHARS = int(os.environ.get("MCP_MAX_CHARS", "6000"))
 CACHE_DIR = os.path.join(os.environ.get("TMPDIR", "/tmp"), "mcp-sh-cache")
@@ -30,6 +37,7 @@ USAGE = """mcp.sh — every MCP server you have, as commands. Run with bash.
   mcp.sh call --write <server>.<tool> k=v ...   run a tool that creates/changes/sends (asks the user first)
   mcp.sh status                        which servers have a saved login (local file; never opens a browser)
   mcp.sh check [server]                connect for real (no OAuth) and report how many tools each exposes
+  mcp.sh doctor                        why a server still asks for auth: vault path, expected key, stray entries
 
 Rules: the output is the fact — ids, URLs and numbers come from it, never from
 you. A tool `tools` does not list cannot be called. If a call says
@@ -446,19 +454,49 @@ def cmd_call(a):
         print()
 
 
-def saved_logins():
-    """Servidores con sesion guardada, leyendo SOLO ~/.mcporter/credentials.json.
-    Sondear por red (`mcporter list --status`) llego a arrancar el OAuth de cada
-    servidor en una maquina nueva: mirar no debe autenticar."""
-    out = set()
+def vault():
     try:
         with open(CREDENTIALS) as f:
-            cred = json.load(f)
+            return json.load(f)
     except (OSError, json.JSONDecodeError):
-        return out
-    for key, e in (cred.get("entries") or {}).items():
-        if isinstance(e, dict) and e.get("tokens"):
-            out.add(e.get("serverName") or key.split("|", 1)[0])
+        return {}
+
+
+def vault_key(name, url):
+    """Misma derivacion que mcporter (dist/oauth-vault.js: vaultKeyForDefinition):
+    sha256 de {name, url, command} -> 16 hex. Depende del NOMBRE y de la URL:
+    autenticar el mismo servidor por su URL en vez de por su nombre guarda el
+    token bajo otra clave, y el nombre del catalogo sigue "sin autenticar"."""
+    desc = json.dumps({"name": name, "url": url, "command": None}, separators=(",", ":"))
+    return f"{name}|{hashlib.sha256(desc.encode()).hexdigest()[:16]}"
+
+
+def saved_logins():
+    """Servidores con sesion guardada, leyendo SOLO el fichero local de
+    mcporter. Sondear por red (`mcporter list --status`) llego a arrancar el
+    OAuth de cada servidor en una maquina nueva: mirar no debe autenticar.
+
+    Devuelve {nombre_del_catalogo: "" | "as:<otro-nombre>"} — lo segundo cuando
+    el token existe pero guardado bajo otro nombre para la MISMA url (auth por
+    URL), que es invisible para mcporter cuando se le llama por nombre."""
+    cred = vault()
+    entries = cred.get("entries") or {}
+    by_name = {}
+    by_url = {}
+    for key, e in entries.items():
+        if not (isinstance(e, dict) and e.get("tokens")):
+            continue
+        name = e.get("serverName") or key.split("|", 1)[0]
+        by_name[name] = key
+        if e.get("serverUrl"):
+            by_url.setdefault(e["serverUrl"].rstrip("/"), name)
+    out = {}
+    for s, cfg in servers().items():
+        url = (cfg.get("baseUrl") or cfg.get("url") or "").rstrip("/")
+        if s in by_name:
+            out[s] = ""
+        elif url and url in by_url:
+            out[s] = "as:" + by_url[url]
     return out
 
 
@@ -466,10 +504,48 @@ def cmd_status(_):
     auth = saved_logins()
     print("  MCP (via mcporter):")
     for s in servers():
-        if s in auth:
-            print(f"    ✅ {s:12} sesion guardada")
-        else:
+        if s not in auth:
             print(f"    ○  {s:12} sin autenticar ->  mcporter auth {s}")
+        elif auth[s]:
+            other = auth[s][3:]
+            print(f"    ⚠️  {s:12} hay un token para esa URL pero guardado como '{other}' (auth por URL): "
+                  f"mcporter auth {s}   <- por NOMBRE, no por URL")
+        else:
+            print(f"    ✅ {s:12} sesion guardada")
+
+
+def cmd_doctor(_):
+    """Por que 'ya autentique y sigue pidiendo auth'. Todo en local."""
+    print(f"  vault:      {CREDENTIALS}" + ("  [via XDG_DATA_HOME]" if os.path.isabs(_XDG) else ""))
+    if not os.path.exists(CREDENTIALS):
+        print("              NO existe: para mcporter no hay ninguna sesion guardada.")
+    if os.path.isabs(_XDG):
+        print(f"  XDG_DATA_HOME={_XDG}  <- si otras shells NO lo definen, miran {HOME}/.mcporter y no ven estos tokens")
+    print(f"  catalogo:   {CATALOG}")
+    v = vault()
+    entries = v.get("entries") or {}
+    print("\n  servidor      url del catalogo                         clave esperada        estado")
+    for s, cfg in servers().items():
+        url = cfg.get("baseUrl") or cfg.get("url") or ""
+        k = vault_key(s, url)
+        e = entries.get(k)
+        if e and e.get("tokens"):
+            state = "ok"
+        elif e:
+            state = "entrada sin tokens (OAuth a medias): repite mcporter auth " + s
+        else:
+            same = [kk for kk, ee in entries.items()
+                    if isinstance(ee, dict) and ee.get("tokens") and (ee.get("serverUrl") or "").rstrip("/") == url.rstrip("/")]
+            state = f"token guardado bajo otra clave ({', '.join(same)}): autentica por NOMBRE -> mcporter auth {s}" if same else "sin token"
+        print(f"  {s:13} {url:40} {k:21} {state}")
+    extra = [k for k in entries if not any(k == vault_key(s, (c.get("baseUrl") or c.get("url") or "")) for s, c in servers().items())]
+    if extra:
+        print("\n  entradas que no corresponden a ningun servidor del catalogo (normalmente auth por URL o un catalogo cambiado):")
+        for k in extra:
+            e = entries[k]
+            print(f"    {k}  url={e.get('serverUrl','?')}  tokens={'si' if e.get('tokens') else 'no'}  updatedAt={e.get('updatedAt','?')}")
+    print("\n  Recordatorio: la clave es sha256(nombre+url). Cambiar la url de un servidor en el")
+    print("  catalogo retira sus credenciales a proposito; re-autenticar es lo esperado.")
 
 
 def cmd_check(a):
@@ -486,7 +562,7 @@ def main(argv):
         print(USAGE)
         return
     cmd, a = argv[0], argv[1:]
-    fn = {"list": cmd_list, "tools": cmd_tools, "describe": cmd_describe, "call": cmd_call, "status": cmd_status, "check": cmd_check}.get(cmd)
+    fn = {"list": cmd_list, "tools": cmd_tools, "describe": cmd_describe, "call": cmd_call, "status": cmd_status, "check": cmd_check, "doctor": cmd_doctor}.get(cmd)
     if not fn:
         die(USAGE)
     fn(a)

@@ -116,6 +116,48 @@ lista, deja el ticket en fichero y no lo sube (ya lo contemplaba).
   `tui.json`; su plugin usa globales de Bun y exporta una factory con nombre,
   asi que los tests de carga de `test/plugins.mjs` lo rechazarian.
 
+## 🔎 Cuanto cuesta un turno de `auto`, medido pieza por pieza — 2026-09-22
+
+Con un proxy delante de llama.cpp capturando la peticion real y
+`usage.prompt_tokens` como regla, un turno minimo ("say ok") costaba **15.253
+tokens**:
+
+| bloque | tok | |
+| --- | --- | --- |
+| system prompt | 12.186 | 80% |
+| esquemas de las 7 tools nativas | 2.637 | 17% (bash 706, read 674, edit 659, grep 508, glob 463, write 447, skill 362) |
+| mensaje + plumbing | ~430 | 3% |
+| **MCP** | **0** | `mcp: {}`; Notion/Jira/Quantfury solo cuestan al usarse (~450 el `tools <server> <palabra>`) |
+
+Dentro del system prompt: **descripciones de skills 4.520**, `agent/auto.md`
+2.146, `knowledge-protocol.md` 2.071, `engineering-discipline.md` 1.823,
+`tools.md` 1.043, `memory/preferences.md` 73, base de opencode ~510.
+
+**El hallazgo**: de esos 4.520, **2.067 eran skills que no son de este repo**.
+opencode descubre `~/.claude/skills/` automaticamente y no hay forma de
+desactivarlo (issue anomalyco/opencode#12604), asi que viajaban en cada turno
+las skills sincronizadas de claude.ai: `docs` 354, `docx` 341, `pptx` 329,
+`xlsx` 319, `pdf` 210, `morning` 192, `skill-creator` 178, `import-memory` 144.
+Ninguna la va a usar un agente de codigo.
+
+Arreglo: `permission.skill` con las ocho en `deny` (el `*: allow` primero). Un
+`deny` no solo bloquea la carga: **saca su descripcion del prompt** (verificado
+con el proxy: 21 skills -> 13, system de 46.139 a 39.142 chars).
+
+Resultado: **15.253 -> 13.205 tok/turno (-13,4%)**. Si aparece otra skill
+ajena, se anade a esa lista. Lo siguiente a mirar (no hecho): el solape entre
+`knowledge-protocol.md` y `tools.md`, ~3.1k juntos.
+
+## 📝 El ticket de Jira pasa de wiki markup a Markdown — 2026-09-21
+
+La skill `jira-ticket` escribia el ticket en Jira Text (`h3.`, `*bold*`)
+porque el MCP propio de antes lo pegaba tal cual. El Atlassian Rovo MCP toma
+Markdown, y Markdown es lo que un humano lee bien en el fichero. Cambio: la
+plantilla es `# Titulo:` + `## 1.`..`## 6.` + `###` por escenario Gherkin;
+`plugin/ticket-format.ts` renumera `## N.` (mismo bug mecanico, misma regla);
+`bench/score.sh` puntua `## 1.`..`## 6.`. Probado con `auto`: ticket de 6
+secciones y 6 escenarios, PASS en el scorer, sin stack inventado.
+
 ## 🩹 Lo que un modelo pequeno hizo con `mcp.sh`, y lo que se cambio — 2026-09-21
 
 Dos maquinas, el mismo pedido ("crea una pagina en Notion con este markdown"),

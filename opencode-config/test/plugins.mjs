@@ -600,18 +600,18 @@ const t = async (n, f) => {
   const tf = hooks["experimental.text.complete"]
   console.log("\nticket-format:")
   await t("renumera las secciones cuando el modelo repite la 5", async () => {
-    const o = { text: ["h3. Titulo: X", "h3. 1. Resumen", "h3. 2. Contexto", "h3. 3. Criterios",
-                       "h3. 4. DoD", "h3. 5. Notas", "h3. 5. Documentacion"].join("\n\n") }
+    const o = { text: ["# Titulo: X", "## 1. Resumen", "## 2. Contexto", "## 3. Criterios",
+                       "## 4. DoD", "## 5. Notas", "## 5. Documentacion"].join("\n\n") }
     await tf({}, o)
-    if (!o.text.includes("h3. 6. Documentacion")) throw new Error("no renumero: " + (o.text.match(/^h3\. \d+\./gm) || []).join(" "))
+    if (!o.text.includes("## 6. Documentacion")) throw new Error("no renumero: " + (o.text.match(/^## \d+\./gm) || []).join(" "))
   })
   await t("NO toca texto que no es un ticket", async () => {
-    const orig = "Claro, mira el punto h3. 5. de ese documento"
+    const orig = "Claro, mira el punto ## 5. de ese documento"
     const o = { text: orig }; await tf({}, o)
     if (o.text !== orig) throw new Error("modifico texto normal")
   })
   await t("NO toca un ticket ya bien numerado", async () => {
-    const orig = ["h3. Titulo: X", "h3. 1. A", "h3. 2. B", "h3. 3. C"].join("\n\n")
+    const orig = ["# Titulo: X", "## 1. A", "## 2. B", "## 3. C"].join("\n\n")
     const o = { text: orig }; await tf({}, o)
     if (o.text !== orig) throw new Error("cambio un ticket correcto")
   })
@@ -619,34 +619,34 @@ const t = async (n, f) => {
     // La skill `jira-ticket` ya no deja el ticket en el chat: lo escribe en
     // `ticket-<algo>.md`. Sin esto, el renumerado arreglaba el texto del chat y
     // el fichero —el que se lee y el que acaba en Jira— se quedaba con el
-    // `h3. 5.` duplicado.
+    // `## 5.` duplicado.
     const before = hooks["tool.execute.before"]
-    const mal = ["h3. Titulo: X", "", "h3. 1. Resumen", "h3. 2. Contexto", "h3. 5. DoD", "h3. 5. Notas", "h3. 5. Documentacion"].join("\n")
+    const mal = ["# Titulo: X", "", "## 1. Resumen", "## 2. Contexto", "## 5. DoD", "## 5. Notas", "## 5. Documentacion"].join("\n")
     const a = { content: mal }
     await before({ tool: "write" }, { args: a })
-    const nums = a.content.match(/^h3\. \d+\./gm).join(" ")
-    if (nums !== "h3. 1. h3. 2. h3. 3. h3. 4. h3. 5.") throw new Error("mal renumerado: " + nums)
+    const nums = a.content.match(/^## \d+\./gm).join(" ")
+    if (nums !== "## 1. ## 2. ## 3. ## 4. ## 5.") throw new Error("mal renumerado: " + nums)
   })
   await t("un `edit` PARCIAL no se renumera (seria peor el remedio)", async () => {
     // Renumerar un fragmento desde 1 convertiria la seccion 5 en la 1.
     const before = hooks["tool.execute.before"]
-    const frag = { newString: "h3. 5. Notas Tecnicas\n* algo" }
+    const frag = { newString: "## 5. Notas Tecnicas\n* algo" }
     await before({ tool: "edit" }, { args: frag })
-    if (!frag.newString.startsWith("h3. 5.")) throw new Error("toco un fragmento: " + frag.newString)
+    if (!frag.newString.startsWith("## 5.")) throw new Error("toco un fragmento: " + frag.newString)
     // Pero un edit que reemplaza el ticket COMPLETO si.
-    const full = { newString: ["h3. Titulo: X", "h3. 1. A", "h3. 5. B", "h3. 5. C"].join("\n") }
+    const full = { newString: ["# Titulo: X", "## 1. A", "## 5. B", "## 5. C"].join("\n") }
     await before({ tool: "edit" }, { args: full })
-    if (!full.newString.includes("h3. 3. C")) throw new Error("no renumero un ticket completo: " + full.newString)
+    if (!full.newString.includes("## 3. C")) throw new Error("no renumero un ticket completo: " + full.newString)
   })
   await t("no toca un fichero que NO es un ticket", async () => {
     const before = hooks["tool.execute.before"]
-    const readme = { content: "# Mi README\n\nh3. 5. esto no es un ticket\n" }
+    const readme = { content: "# Mi README\n\n## 5. esto no es un ticket\n" }
     await before({ tool: "write" }, { args: readme })
-    if (!readme.content.includes("h3. 5. esto no es un ticket")) throw new Error("modifico un fichero normal")
+    if (!readme.content.includes("## 5. esto no es un ticket")) throw new Error("modifico un fichero normal")
   })
   await t("OPENCODE_TICKETFMT_OFF=1 lo desactiva", async () => {
     process.env.OPENCODE_TICKETFMT_OFF = "1"
-    const orig = ["h3. Titulo: X", "h3. 1. A", "h3. 5. B", "h3. 5. C"].join("\n\n")
+    const orig = ["# Titulo: X", "## 1. A", "## 5. B", "## 5. C"].join("\n\n")
     const o = { text: orig }; await tf({}, o)
     delete process.env.OPENCODE_TICKETFMT_OFF
     if (o.text !== orig) throw new Error("sigue activo")
@@ -863,6 +863,25 @@ echo "unknown" >&2; exit 1
   writeFileSync(creds, JSON.stringify({ entries: { "notion|1": { serverName: "notion", tokens: { accessToken: "x" } }, "quantfury|2": { serverName: "quantfury", clientInfo: {} } } }))
   env.MCP_CREDENTIALS = creds
   console.log("\nmcp.sh:")
+  await t("status: avisa cuando el token esta guardado bajo OTRO nombre para la misma url (auth por URL)", async () => {
+    const byUrl = join(dir, "creds-byurl.json")
+    writeFileSync(byUrl, JSON.stringify({ entries: { "mcp-notion-com-mcp|abc": { serverName: "mcp-notion-com-mcp", serverUrl: "https://x/mcp", tokens: { accessToken: "t" } } } }))
+    const r = { ...env, MCP_CREDENTIALS: byUrl }
+    let out
+    try {
+      out = execFileSync("bash", [join(HERE, "..", "bin", "mcp.sh"), "status"], { encoding: "utf8", env: r, stdio: ["ignore", "pipe", "pipe"] })
+    } catch (e) {
+      out = (e.stdout ?? "") + (e.stderr ?? "")
+    }
+    if (!out.includes("guardado como 'mcp-notion-com-mcp'") || !out.includes("por NOMBRE, no por URL")) throw new Error(out)
+  })
+  await t("doctor: dice el vault en uso, la clave esperada por servidor y las entradas huerfanas", async () => {
+    const r = mcp("doctor")
+    if (r.rc !== 0) throw new Error(r.out)
+    if (!r.out.includes("vault:") || !r.out.includes("catalogo:")) throw new Error("no dice las rutas: " + r.out)
+    if (!/notion\|[0-9a-f]{16}/.test(r.out)) throw new Error("no calcula la clave del vault: " + r.out)
+    if (!r.out.includes("quantfury") || !r.out.includes("sin token")) throw new Error("no marca los que no tienen token: " + r.out)
+  })
   await t("status: lee credentials.json en local y NUNCA llama a mcporter (era lo que abria el navegador)", async () => {
     const calls = join(dir, "calls.log")
     writeFileSync(fake, readFileSync(fake, "utf8").replace("#!/usr/bin/env bash\n", `#!/usr/bin/env bash\necho "$@" >> '${calls}'\n`))

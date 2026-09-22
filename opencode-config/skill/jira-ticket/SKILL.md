@@ -1,6 +1,6 @@
 ---
 name: jira-ticket
-description: Use when the user asks for a Jira ticket, a user story, acceptance criteria in Gherkin, or wants a request turned into something a developer can pick up — and also when they then ask to actually create it in Jira. Writes the ticket to a `ticket-<short-description>.md` file in the current folder so the user can read and correct it, asks first when the request is too vague for INVEST, grounds technical notes in the real code, marks anything unverified as [POR CONFIRMAR], and only after the user confirms creates the issue through the Atlassian MCP (`mcp.sh call --write atlassian.createJiraIssue`, run with bash). Triggers in Spanish too: "hazme un ticket", "historia de usuario", "criterios de aceptacion", "pasalo a Jira", "crea el ticket en Jira", "subelo a Jira".
+description: Use when the user asks for a Jira ticket, a user story (written in Markdown), acceptance criteria in Gherkin, or wants a request turned into something a developer can pick up — and also when they then ask to actually create it in Jira. Writes the ticket to a `ticket-<short-description>.md` file in the current folder so the user can read and correct it, asks first when the request is too vague for INVEST, grounds technical notes in the real code, marks anything unverified as [POR CONFIRMAR], and only after the user confirms creates the issue through the Atlassian MCP (`mcp.sh call --write atlassian.createJiraIssue`, run with bash). Triggers in Spanish too: "hazme un ticket", "historia de usuario", "criterios de aceptacion", "pasalo a Jira", "crea el ticket en Jira", "subelo a Jira".
 ---
 
 # Ticket de Jira (Historia de Usuario)
@@ -138,9 +138,9 @@ separated, no accents (`ñ` → `n`), no articles, no special characters.
 "Corregir el error 500 al guardar el perfil"      ->  ticket-error-500-guardar-perfil.md
 ```
 
-**The file contains the Jira markup and nothing else** — no `# heading` of your
-own, no explanation, no triple backticks around it. It has to be pasteable into
-Jira exactly as it is, and it is what STEP 3 sends to the API.
+**The file contains the ticket in Markdown and nothing else** — no heading of
+your own above it, no explanation, no triple backticks around it. It is what
+STEP 3 sends to Jira as the description, and what a human reads before that.
 
 **If that file already exists**, this is an iteration on a ticket you wrote
 before: **read it first**, then rewrite it whole with the change applied. Reading
@@ -160,40 +160,39 @@ Do **not** paste the whole ticket into the chat as well. It is already in the
 file; repeating it burns context and gives the user two copies that can drift
 apart.
 
-The content uses strictly Jira Text / Wiki Markup, and the headings are fixed
-Spanish text:
+The content is **Markdown**, and the headings are fixed Spanish text:
 
 ```
-h3. Titulo: [Titulo de la historia de usuario]
+# Titulo: [Titulo de la historia de usuario]
 
-h3. 1. Resumen de Usuario (User Story)
-* *Como:* [Persona/Rol específico]
-* *Quiero:* [Acción o funcionalidad]
-* *Para:* [Beneficio o valor del negocio]
+## 1. Resumen de Usuario (User Story)
+- **Como:** [Persona/Rol específico]
+- **Quiero:** [Acción o funcionalidad]
+- **Para:** [Beneficio o valor del negocio]
 
-h3. 2. Contexto de Negocio
+## 2. Contexto de Negocio
 [Explicación breve del porqué de esta tarea y el impacto que tiene].
 
-h3. 3. Criterios de Aceptación (Formato Gherkin)
+## 3. Criterios de Aceptación (Formato Gherkin)
 
-h4. Escenario 1: [Nombre del escenario - ej: Caso Feliz]
-* *Dado que* [pre-condición]
-* *Cuando* [acción del usuario]
-* *Entonces* [resultado esperado]
+### Escenario 1: [Nombre del escenario - ej: Caso Feliz]
+- **Dado que** [pre-condición]
+- **Cuando** [acción del usuario]
+- **Entonces** [resultado esperado]
 
-h4. Escenario 2: [Nombre del escenario - ej: Caso de error o borde]
-* *Dado que* [pre-condición]
-* *Cuando* [acción del usuario]
-* *Entonces* [resultado esperado]
+### Escenario 2: [Nombre del escenario - ej: Caso de error o borde]
+- **Dado que** [pre-condición]
+- **Cuando** [acción del usuario]
+- **Entonces** [resultado esperado]
 
-h3. 4. Criterios No Funcionales / Definición de Hecho (DoD)
-* [Detalles de rendimiento, seguridad, manejo de errores o logs necesarios].
+## 4. Criterios No Funcionales / Definición de Hecho (DoD)
+- [Detalles de rendimiento, seguridad, manejo de errores o logs necesarios].
 
-h3. 5. Notas Técnicas / Consideraciones / Dependencias
-* [Aquí incluye endpoints involucrados, limitaciones, reglas de negocio implícitas o bloqueos con otros equipos].
+## 5. Notas Técnicas / Consideraciones / Dependencias
+- [Aquí incluye endpoints involucrados, limitaciones, reglas de negocio implícitas o bloqueos con otros equipos].
 
-h3. 6. Documentación
-* Se requiere documentación de los cambios realizados dentro de Confluence en la documentación técnica del equipo.
+## 6. Documentación
+- Se requiere documentación de los cambios realizados dentro de Confluence en la documentación técnica del equipo.
 ```
 
 Section 6 is **fixed text**: copy it word for word, do not rewrite it or adapt
@@ -202,14 +201,17 @@ it to the ticket. The six section headings are fixed too — `Definición de Hec
 
 Formatting rules:
 
-- Jira syntax, NOT Markdown, inside the block: `h3.` / `h4.` for headings,
-  `*text*` for bold, `*` for bullets. Never `##` or `**text**`.
-- The file has **no** code fence and no language tag: its whole content is the
-  Jira Text, starting at `h3. Titulo:`. (If the user explicitly asks for the
-  ticket in the chat instead of a file, then and only then wrap it in a plain
-  ``` block with no language tag.)
+- Plain Markdown: `#` for the title line, `##` for the six sections, `###` for
+  each Gherkin scenario, `-` for bullets, `**text**` for bold. No Jira wiki
+  markup (`h3.`, `*text*`, `{code}`): the Atlassian MCP takes Markdown and
+  renders it; wiki markup would show up as literal text.
+- Code, paths and identifiers go in backticks: `` `POST /api/v1/sessions` ``.
+- The file is the ticket and nothing else: it starts at `# Titulo:` and it is
+  **not** wrapped in a code fence. (If the user explicitly asks for the ticket
+  in the chat instead of a file, then and only then wrap it in a ```markdown
+  block.)
 - Add as many Gherkin scenarios as needed (at least 2: happy path and one error
-  case). Each with its own `h4.`.
+  case). Each with its own `###`.
 - Outside the file, in the chat, write nothing except the three lines above.
 
 ## STEP 3: CREATE IT IN JIRA — only when the user says so
@@ -239,7 +241,7 @@ invent an issue key. The point of the file is that a human reads it first.
    ```bash
    mcp.sh describe atlassian.createJiraIssue
    mcp.sh call --write atlassian.createJiraIssue projectKey="ABC" issueTypeName="Story" \
-     summary="<the text after 'h3. Titulo:', without the brackets>" \
+     summary="<the text after '# Titulo:', without the brackets>" \
      description=@ticket-<short-description>.md
    ```
 
@@ -250,10 +252,11 @@ invent an issue key. The point of the file is that a human reads it first.
    `auth required`, the user has to run `mcporter auth atlassian` once — say
    exactly that.
 6. On success: the result has the issue `key`. Report it, and record it at the
-   top of the file so the file and Jira do not drift:
+   top of the file (right under the title line) so the file and Jira do not
+   drift:
 
    ```
-   h3. Creado en Jira: ABC-123
+   **Creado en Jira:** ABC-123
    ```
 
 ### The tool and its parameters
@@ -265,10 +268,10 @@ changes them without notice, so this table is the intent, not the schema:
 
 | what | required | value, and where you get it |
 | --- | --- | --- |
-| project key | **yes** | `ABC`. **The ticket template does NOT contain it** — the brackets in `h3. Titulo:` hold the title, nothing else. It comes from the user, or from an earlier ticket in this conversation. If you do not have it, ask: *"¿De qué proyecto de Jira es este ticket?"* Never guess. |
-| summary | **yes** | The title only: the text after `h3. Titulo:`, without the brackets. |
+| project key | **yes** | `ABC`. **The ticket template does NOT contain it** — the brackets in `# Titulo:` hold the title, nothing else. It comes from the user, or from an earlier ticket in this conversation. If you do not have it, ask: *"¿De qué proyecto de Jira es este ticket?"* Never guess. |
+| summary | **yes** | The title only: the text after `# Titulo:`, without the brackets. |
 | issue type | **yes** | `Story` unless the user said otherwise (`Bug`, `Task`, `Epic`). |
-| description | no | The ticket file, whole, via `description=@<file>`. It is Jira markup — do not convert it to Markdown, do not re-indent it. |
+| description | no | The ticket file, whole, via `description=@<file>`. It is Markdown, which is what the Atlassian MCP expects — do not convert it to wiki markup, do not re-indent it. |
 | assignee / labels / parent | no | Only if the user gave them. |
 
 Two rules for building the call:
@@ -276,8 +279,9 @@ Two rules for building the call:
 1. **Omit every optional parameter you were not given.** Do not send `""` or a
    guess to fill a slot. Jira has the defaults.
 2. **The description is the file as it is.** (First ticket through this path:
-   check in Jira that the `h3.` headings rendered. If they came out as literal
-   text, tell the user — the fix belongs in this skill, not in the ticket.)
+   open it in Jira and check that the headings and bullets rendered. If they
+   came out as literal `##`, tell the user — the fix belongs in this skill, not
+   in the ticket.)
 
 If Jira rejects the issue type, that project does not accept that value: the
 error message lists what it does accept.
@@ -294,11 +298,12 @@ from the file. Do not pretend it was created, and do not invent a key.
 These are mistakes this exact model made in real test runs. Check them one by
 one against what you just wrote, before sending it:
 
-1. Does it start with `h3. Titulo:`? (it forgot the title line)
+1. Does it start with `# Titulo:`? (it forgot the title line)
 2. Are the sections numbered 1, 2, 3, 4, 5, 6 **without repeating**? (it wrote
-   `h3. 5.` twice, leaving Documentación as 5 instead of 6)
+   `## 5.` twice, leaving Documentación as 5 instead of 6)
 3. Is section 6 the fixed text, word for word?
-4. Does the block open with ``` and no language tag?
+4. Is the file plain Markdown with no code fence around it, and no `h3.` /
+   `*bold*` wiki markup left inside?
 5. Is there any library, framework or key name nobody gave you?
    (`authToken`, `router.push`, React, axios...) → replace it with a neutral
    description or `[POR CONFIRMAR]`.

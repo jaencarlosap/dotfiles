@@ -50,7 +50,17 @@
     "webfetch": "allow",
     "websearch": "allow",
     "question": "allow",
-    "skill": "allow",
+    "skill": {
+      "*": "allow",
+      "docs": "deny",
+      "docx": "deny",
+      "import-memory": "deny",
+      "morning": "deny",
+      "pdf": "deny",
+      "pptx": "deny",
+      "skill-creator": "deny",
+      "xlsx": "deny"
+    },
     "external_directory": {
       "*": "ask",
       "/tmp/**": "allow",

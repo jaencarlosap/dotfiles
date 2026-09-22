@@ -25,12 +25,12 @@ case "$task" in
   ticket)
     f=$(ls "$dir"/ticket-*.md 2>/dev/null | head -1)
     if [ -z "$f" ]; then echo "FAIL (no creo el fichero)"; exit 0; fi
-    nums=$(grep -o '^h3\. [0-9]\.' "$f" | tr -d '\n')
+    nums=$(grep -o '^## [0-9]\.' "$f" | tr -d '\n')
     # Un stack marcado [POR CONFIRMAR] no es un stack inventado: es justo lo que
     # pide la skill. Sin este filtro, "[POR CONFIRMAR: stack (React, Vue...)]"
     # contaba como FAIL.
     inv=$(grep -viE "POR CONFIRMAR" "$f" | grep -ciE "react|axios|router\.push|authToken")
-    if [ "$nums" = "h3. 1.h3. 2.h3. 3.h3. 4.h3. 5.h3. 6." ] && [ "$inv" -eq 0 ]; then echo "PASS ($(basename "$f"), 1..6, sin stack inventado)"
-    elif [ "$nums" != "h3. 1.h3. 2.h3. 3.h3. 4.h3. 5.h3. 6." ]; then echo "FAIL (secciones: $nums)"
+    if [ "$nums" = "## 1.## 2.## 3.## 4.## 5.## 6." ] && [ "$inv" -eq 0 ]; then echo "PASS ($(basename "$f"), 1..6 en Markdown, sin stack inventado)"
+    elif [ "$nums" != "## 1.## 2.## 3.## 4.## 5.## 6." ]; then echo "FAIL (secciones: $nums)"
     else echo "FAIL (stack inventado)"; fi ;;
 esac
