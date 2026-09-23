@@ -1,0 +1,20 @@
+{
+  "_doc": [
+    "Versiones de las herramientas externas de las que depende este repo.",
+    "`mcporter` esta FIJADA: `make mcporter` instala exactamente esa (npm i -g mcporter@<pin>).",
+    "Por que: dos maquinas instaladas en fechas distintas acaban con versiones distintas. Paso el",
+    "2026-09-23: en un PC una mcporter anterior no conocia `--no-oauth` y cada `mcp.sh call` moria",
+    "con 'Unknown flag'; el modelo lo leyo como 'falta autenticar' y pidio OAuth otra vez.",
+    "Subir el pin: make mcporter_bump (instala la ultima, reescribe este fichero y corre los tests).",
+    "El resto son REFERENCIAS de la ultima version verificada, no pins: gh lo gestiona Homebrew,",
+    "herdr se actualiza con `herdr update`, y opencode/node los mantiene el usuario. Si algo se rompe",
+    "tras una actualizacion, estas son las versiones con las que este repo se probo."
+  ],
+  "mcporter": "0.13.13",
+  "reference": {
+    "gh": "2.100.0",
+    "herdr": "0.9.1",
+    "opencode": "1.18.30",
+    "node": "26.8.1"
+  }
+}

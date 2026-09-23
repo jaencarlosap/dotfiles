@@ -28,6 +28,8 @@ make install       # symlinks de la config (respalda lo previo) + gh. NO toca mc
 make mcporter      # mcporter + enlace del catalogo MCP; no autentica nada (eso: mcporter auth <server>)
 make mcp-status    # que servidores MCP tienen sesion guardada (lee ~/.mcporter/credentials.json; nunca abre el navegador)
 make mcp-check     # conecta de verdad (sin OAuth) y dice cuantas tools expone cada uno
+make versions      # versiones instaladas vs el pin del repo (mcporter) y las referencias
+make mcporter_bump # sube el pin de mcporter a la ultima y corre los tests
 make status        # ver estado de los symlinks
 make test-conn     # ping al server de modelos en pcgamer
 make models        # lista modelos disponibles
@@ -62,6 +64,7 @@ make restore       # restaura el ultimo respaldo
 | `bin/mcp.sh` + `bin/_mcp.py` | TODOS los MCP por bash sobre mcporter: `list` / `tools` / `describe` / `call [--write]`, con politica |
 | `mcporter/mcporter.json` | Catalogo de servidores MCP (symlink a `~/.mcporter/mcporter.json`); credenciales fuera del repo |
 | `mcporter/policy.json`   | Por servidor: `deny` (no existe) y `write` (exige `--write` -> `ask`); `default` para los demas |
+| `mcporter/pin.json`      | Version FIJADA de mcporter (+ referencias de gh/herdr/opencode/node). `make mcporter` instala esa; `make versions` compara |
 | `memory/`                | Memoria GLOBAL versionada: `preferences.md` (siempre en contexto) y `topics/*.md` (bajo demanda) |
 | `bin/webfetch`, `bin/websearch` | Alias de shell para dos nombres de HERRAMIENTA que el modelo escribe en bash |
 | `skill/review-changes/`  | Skill: auditar un diff — verificar lo que afirma y que se quedo sin actualizar |
@@ -115,6 +118,49 @@ lista, deja el ticket en fichero y no lo sube (ya lo contemplaba).
   ordenadas), copia el plugin a `~/.config/opencode/plugins/` y crea un
   `tui.json`; su plugin usa globales de Bun y exporta una factory con nombre,
   asi que los tests de carga de `test/plugins.mjs` lo rechazarian.
+
+## 🧱 `mcp.sh` deja de depender de la version de mcporter — 2026-09-23
+
+Tercer sintoma de la misma causa de fondo: **dependemos de la CLI de un tercero
+y las dos maquinas no tienen la misma version.** En el otro PC, una mcporter
+anterior no conoce `--no-oauth` y cada llamada moria con *"Unknown flag
+'--no-oauth' passed to call command"*; el modelo lo leyo como "hay que
+autenticar" y volvio a pedir auth.
+
+**La causa de fondo era no fijar la version.** `npm i -g mcporter@latest`
+instala "lo que haya ese dia": dos maquinas instaladas en fechas distintas
+divergen. Ahora `mcporter/pin.json` fija la version y `make mcporter` instala
+**exactamente** esa (`npm i -g mcporter@0.13.13`), avisando si la instalada
+difiere; `make mcporter_bump` sube el pin (instala la ultima, reescribe el
+fichero, limpia la cache de capacidades y corre los tests) y `make versions`
+compara instalado vs pin. Del resto de herramientas se guarda la ultima version
+verificada como **referencia** (gh, herdr, opencode, node): no se fijan porque
+las gestionan Homebrew, `herdr update` o el usuario, pero si algo se rompe tras
+una actualizacion, ahi esta con que se probo esto.
+
+Cambios para que tampoco dependa de un flag concreto:
+
+- **Deteccion de capacidad**: `mcp.sh` mira una vez (cacheado por version de
+  mcporter) si `call --help` menciona `--no-oauth` y solo entonces lo pasa. Con
+  una version antigua, la llamada sale igual.
+- **Cinturon que no depende de flags**: toda invocacion lleva
+  `MCPORTER_OAUTH_NO_BROWSER=1` y stdin cerrado.
+- **Preflight local**: `tools` y `call` comprueban en `credentials.json` que
+  ese servidor tiene sesion **antes** de llamar a mcporter. Sin sesion no se
+  invoca nada (rc 5) y el mensaje dice quien debe autenticar y como. El camino
+  caliente ya no puede acabar en un navegador abierto.
+- `mcp.sh doctor` imprime la version instalada, si soporta el flag y si difiere
+  del pin del repo.
+- Tests con un mcporter falso "viejo" que rechaza `--no-oauth`, y con el vault
+  vacio para el preflight (107 en total).
+
+**¿Cambiar de orquestador?** No hace falta y no seria mejor: el problema no es
+mcporter, es acoplarse a los flags de una CLI. La alternativa real es hablar
+MCP directamente desde `bin/_mcp.py` (HTTP + JSON-RPC, ya probado a mano con
+Notion y Atlassian) y dejar mcporter **solo para autenticar** — pero eso obliga
+a implementar OAuth 2.1 + registro dinamico + refresh, que es justo lo que
+mcporter aporta. Con la deteccion de capacidad y el preflight, la superficie
+que queda expuesta a su version es `tools`/`call`, y ambos degradan bien.
 
 ## 🔐 "Ya autentique y me vuelve a pedir auth cada vez que cambio de modelo" — 2026-09-22
 

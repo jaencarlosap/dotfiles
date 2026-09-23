@@ -20,6 +20,10 @@ LINKS        := opencode.jsonc agent rules command plugin bin templates skill me
 #   - un id de modelo que no existe da 404, no un fallback silencioso
 SWAP_URL := http://pcgamer:1234
 
+# mcporter: version FIJADA en mcporter/pin.json (no @latest: dos maquinas
+# instaladas en fechas distintas acabarian con versiones distintas).
+MCPORTER_PIN := $(shell python3 -c "import json;print(json.load(open('$(REPO_DIR)/mcporter/pin.json'))['mcporter'])" 2>/dev/null)
+
 .DEFAULT_GOAL := help
 
 ## help: Muestra esta ayuda
@@ -122,13 +126,17 @@ mcporter:
 	@# opencode.jsonc lleva `mcp: {}` a proposito: un MCP declarado ahi mete su
 	@# esquema en CADA turno (Notion: 4370 tok solo lectura). Por mcp.sh cuesta 0
 	@# hasta que se usa. Autenticar es aparte y por servidor: mcporter auth <s>.
-	@if command -v mcporter >/dev/null 2>&1; then \
-		echo "  ✅ mcporter $$(mcporter --version </dev/null 2>/dev/null) ya instalado"; \
+	@# Se instala la version del pin, ni mas ni menos: asi todas las maquinas
+	@# corren la misma. mcp.sh detecta capacidades igualmente, por si acaso.
+	@test -n "$(MCPORTER_PIN)" || { echo "  ❌ no puedo leer mcporter/pin.json"; exit 1; }
+	@have=$$(command -v mcporter >/dev/null 2>&1 && mcporter --version </dev/null 2>/dev/null || echo ""); \
+	if [ "$$have" = "$(MCPORTER_PIN)" ]; then \
+		echo "  ✅ mcporter $$have (= pin del repo)"; \
 	elif command -v npm >/dev/null 2>&1; then \
-		echo "  instalando mcporter con npm..."; \
-		npm install --global mcporter >/dev/null 2>&1 && echo "  ✅ mcporter instalado"; \
+		[ -n "$$have" ] && echo "  mcporter $$have != pin $(MCPORTER_PIN): fijando..." || echo "  instalando mcporter $(MCPORTER_PIN)..."; \
+		npm install --global mcporter@$(MCPORTER_PIN) >/dev/null 2>&1 && echo "  ✅ mcporter $$(mcporter --version </dev/null 2>/dev/null)" || { echo "  ❌ npm no pudo instalar mcporter@$(MCPORTER_PIN)"; exit 1; }; \
 	else \
-		echo "  ❌ falta npm (Node 22+): instala mcporter a mano -> https://github.com/steipete/mcporter"; exit 1; \
+		echo "  ❌ falta npm (Node 22+): npm i -g mcporter@$(MCPORTER_PIN)"; exit 1; \
 	fi
 	@mkdir -p "$(HOME)/.mcporter"; ln -sfn "$(REPO_DIR)/mcporter/mcporter.json" "$(HOME)/.mcporter/mcporter.json"; \
 	echo "  linked  $(HOME)/.mcporter/mcporter.json -> $(REPO_DIR)/mcporter/mcporter.json"
@@ -146,6 +154,30 @@ gh:
 		echo "  ❌ falta Homebrew: instala gh a mano -> https://cli.github.com"; \
 	fi
 	@gh auth status >/dev/null 2>&1 && echo "  ✅ gh: GitHub autenticado" || echo "  ○ gh: sin autenticar ->  gh auth login"
+
+## mcporter_bump: Sube el pin de mcporter a la ultima version, lo escribe en mcporter/pin.json y corre los tests
+.PHONY: mcporter_bump
+mcporter_bump:
+	@command -v npm >/dev/null 2>&1 || { echo "  ❌ falta npm"; exit 1; }
+	@npm install --global mcporter@latest >/dev/null 2>&1 || { echo "  ❌ npm fallo"; exit 1; }
+	@new=$$(mcporter --version </dev/null 2>/dev/null); \
+	python3 -c "import json,sys;p='$(REPO_DIR)/mcporter/pin.json';d=json.load(open(p));old=d['mcporter'];d['mcporter']=sys.argv[1];json.dump(d,open(p,'w'),indent=2,ensure_ascii=False);open(p,'a').write('\n');print(f'  pin {old} -> {sys.argv[1]}')" "$$new"
+	@rm -rf "$${TMPDIR:-/tmp}/mcp-sh-cache"
+	@$(MAKE) --no-print-directory test-plugins
+	@echo "  Si los tests pasan, commitea mcporter/pin.json para que las demas maquinas usen esta version."
+
+## versions: Versiones instaladas vs las que fija/registra mcporter/pin.json
+.PHONY: versions
+versions:
+	@pin="$(REPO_DIR)/mcporter/pin.json"; \
+	for t in mcporter gh herdr opencode node; do \
+		have=$$(command -v $$t >/dev/null 2>&1 && $$t --version </dev/null 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "-"); \
+		want=$$(python3 -c "import json,sys;d=json.load(open('$$pin'));print(d.get(sys.argv[1]) or (d.get('reference') or {}).get(sys.argv[1]) or '-')" $$t); \
+		kind=$$(python3 -c "import json,sys;d=json.load(open('$$pin'));print('pin' if sys.argv[1] in d else 'ref')" $$t); \
+		if [ "$$have" = "$$want" ]; then mark="✅"; elif [ "$$kind" = "pin" ]; then mark="❌"; else mark="○ "; fi; \
+		printf "  %s %-10s instalada=%-10s %s=%s\n" "$$mark" "$$t" "$$have" "$$kind" "$$want"; \
+	done
+	@echo "  pin = se instala exactamente esa (make mcporter) · ref = ultima verificada, informativa"
 
 ## mcp-status: Servidores MCP del catalogo: cuales tienen sesion guardada (lectura LOCAL; nunca abre el navegador)
 .PHONY: mcp-status

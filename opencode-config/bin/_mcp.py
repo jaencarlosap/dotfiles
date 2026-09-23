@@ -84,8 +84,62 @@ def verdict(server, tool, write):
     return "allow"
 
 
-def run(args, stdin_null=True):
-    return subprocess.run([MCPORTER, *args], capture_output=True, text=True, stdin=subprocess.DEVNULL if stdin_null else None)
+# `--no-oauth` (no arrancar OAuth) no existe en todas las versiones de mcporter:
+# en una maquina con una anterior, pasarlo mataba la llamada con "Unknown flag".
+# Se comprueba una vez por version y se cachea; si no esta, no se pasa y la
+# proteccion la da el preflight local (abajo) + MCPORTER_OAUTH_NO_BROWSER.
+def pinned_version():
+    try:
+        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "mcporter", "pin.json")) as f:
+            return json.load(f).get("mcporter")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def mcporter_version():
+    r = subprocess.run([MCPORTER, "--version"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    return (r.stdout or r.stderr or "?").strip().splitlines()[0] if r.returncode == 0 else "?"
+
+
+def supports_no_oauth():
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    f = os.path.join(CACHE_DIR, f"caps-{mcporter_version()}.json")
+    try:
+        with open(f) as fh:
+            return json.load(fh)["no_oauth"]
+    except Exception:
+        pass
+    r = subprocess.run([MCPORTER, "call", "--help"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    ok = "--no-oauth" in (r.stdout or "") + (r.stderr or "")
+    try:
+        with open(f, "w") as fh:
+            json.dump({"no_oauth": ok}, fh)
+    except OSError:
+        pass
+    return ok
+
+
+def run(args, stdin_null=True, no_oauth=True):
+    """Toda llamada a mcporter pasa por aqui. `no_oauth` pide que no arranque un
+    flujo de OAuth; se traduce al flag si la version lo soporta, y siempre se
+    fija MCPORTER_OAUTH_NO_BROWSER=1 + stdin cerrado para que, si aun asi lo
+    intentara, no abra el navegador del usuario ni se quede esperando."""
+    argv = list(args)
+    if no_oauth and supports_no_oauth():
+        argv.append("--no-oauth")
+    env = {**os.environ, "MCPORTER_OAUTH_NO_BROWSER": "1"}
+    return subprocess.run([MCPORTER, *argv], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL if stdin_null else None, env=env)
+
+
+def need_login(server):
+    """Si el vault local no tiene token para este servidor, no se llama a
+    mcporter: se dice quien tiene que autenticar y como. Asi el camino caliente
+    no depende de flags ni puede terminar en un navegador abierto."""
+    if server in saved_logins():
+        return
+    die(f"{server} has no saved login in {CREDENTIALS}. Ask the USER to run once, by NAME:  mcporter auth {server}\n"
+        f"Never run that yourself: it opens their browser and blocks. Diagnose with: mcp.sh doctor", 5)
 
 
 def tools_json(server):
@@ -94,7 +148,7 @@ def tools_json(server):
     if os.path.exists(f) and time.time() - os.path.getmtime(f) < CACHE_TTL:
         with open(f) as fh:
             return json.load(fh)
-    r = run(["list", server, "--json", "--no-oauth"])
+    r = run(["list", server, "--json"])
     try:
         d = json.loads(r.stdout)
     except json.JSONDecodeError:
@@ -114,7 +168,7 @@ def tool_names_quiet(server):
         if os.path.exists(f) and time.time() - os.path.getmtime(f) < CACHE_TTL:
             with open(f) as fh:
                 return [t["name"] for t in json.load(fh).get("tools") or []]
-        r = run(["list", server, "--json", "--no-oauth"])
+        r = run(["list", server, "--json"])
         d = json.loads(r.stdout)
         if d.get("tools"):
             os.makedirs(CACHE_DIR, exist_ok=True)
@@ -157,6 +211,7 @@ def cmd_tools(a):
     server, filt = a[0], (a[1].lower() if len(a) > 1 else "")
     if server not in servers():
         die(f"no server named {server}. Catalog: {', '.join(servers()) or '(empty)'}")
+    need_login(server)
     d = tools_json(server)
     tools = d.get("tools") or []
     if not tools:
@@ -438,12 +493,13 @@ def cmd_call(a):
         die(f"BLOCKED by policy: {s}.{t} is not available from here. See what is: mcp.sh tools {s}", 2)
     if v == "write-required":
         die(f"{s}.{t} changes things. Re-run as:  mcp.sh call --write {s}.{t} {' '.join(shlex.quote(x) for x in rest)}   (the user will be asked to confirm)", 3)
+    need_login(s)
     rest, coerced = coerce_args(s, t, rest)
     problems = validate_args(s, t, rest)
     if problems:
         die(f"{s}.{t}: not sent — the arguments do not match the tool's schema:\n  - " + "\n  - ".join(problems) +
             f"\nSee: mcp.sh describe {s}.{t}   (nested shape + example). This is an argument error, not a server bug.", 4)
-    r = run(["call", f"{s}.{t}", *rest, "--output", "text", "--no-oauth"])
+    r = run(["call", f"{s}.{t}", *rest, "--output", "text"])
     if r.returncode != 0:
         out = (r.stderr or "") + (r.stdout or "")
         msg = f"{s}.{t} failed (exit {r.returncode}):\n" + "\n".join(out.strip().splitlines()[-8:])
@@ -519,6 +575,9 @@ def cmd_status(_):
 
 def cmd_doctor(_):
     """Por que 'ya autentique y sigue pidiendo auth'. Todo en local."""
+    have, pin = mcporter_version(), pinned_version()
+    mismatch = f"   ⚠️  el repo fija {pin}: make -C opencode-config mcporter" if pin and have != pin else ""
+    print(f"  mcporter:   {have}   --no-oauth: {'si' if supports_no_oauth() else 'NO (version antigua; mcp.sh no lo pasa)'}{mismatch}")
     print(f"  vault:      {CREDENTIALS}" + ("  [via XDG_DATA_HOME]" if os.path.isabs(_XDG) else ""))
     if not os.path.exists(CREDENTIALS):
         print("              NO existe: para mcporter no hay ninguna sesion guardada.")
@@ -554,7 +613,7 @@ def cmd_doctor(_):
 def cmd_check(a):
     names = a[:1] or list(servers())
     for s in names:
-        r = run(["list", s, "--status", "--no-oauth"])
+        r = run(["list", s, "--status"])
         text = r.stdout + r.stderr
         m = re.search(r"(\d+) tools|auth required|HTTP \d+|unauthori[a-z]*", text)
         print(f"    {s}: {m.group(0) if m else 'sin respuesta'}")

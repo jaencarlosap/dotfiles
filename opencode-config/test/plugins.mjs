@@ -822,6 +822,17 @@ const t = async (n, f) => {
   // el servidor "locked" simula OAuth pendiente.
   const fake = join(dir, "mcporter")
   writeFileSync(fake, `#!/usr/bin/env bash
+if [ "$1" = "--version" ]; then echo "\${FAKE_MCPORTER_VERSION:-9.9.9}"; exit 0; fi
+if [ "$1" = "call" ] && [ "$2" = "--help" ]; then
+  echo "Usage: mcporter call <server.tool>"
+  [ -n "\$FAKE_MCPORTER_OLD" ] || echo "  --no-oauth   Never start OAuth"
+  exit 0
+fi
+for a in "$@"; do
+  if [ "$a" = "--no-oauth" ] && [ -n "\$FAKE_MCPORTER_OLD" ]; then
+    echo "Unknown flag '--no-oauth' passed to call command." >&2; exit 2
+  fi
+done
 if [ "$1" = "list" ]; then
   if [ "$2" = "locked" ]; then echo "auth required — run 'mcporter auth locked'" >&2; exit 1; fi
   if [ "$2" = "quantfury" ]; then
@@ -844,7 +855,7 @@ if [ "$1" = "call" ]; then
   if [ "$2" = "locked.x" ]; then echo "Unauthorized: OAuth required" >&2; exit 1; fi
   if [ "$2" = "notion.notion-fetch" ]; then echo '{"status":400,"code":"validation_error","message":"Property \"Name\" not found in the data source. All editable property keys: \"Notes\" (type: title)"}' >&2; exit 1; fi
   case "$3" in *received*string*) echo "Input validation error: pages.0: Unrecognized key: parent; expected object, received string" >&2; exit 1;; esac
-  echo "CALLED $2 ARGS: $3 $4"; exit 0
+  shift; sel="$1"; shift; echo "CALLED $sel ARGS: $@"; exit 0
 fi
 echo "unknown" >&2; exit 1
 `)
@@ -860,7 +871,13 @@ echo "unknown" >&2; exit 1
     }
   }
   const creds = join(dir, "credentials.json")
-  writeFileSync(creds, JSON.stringify({ entries: { "notion|1": { serverName: "notion", tokens: { accessToken: "x" } }, "quantfury|2": { serverName: "quantfury", clientInfo: {} } } }))
+  // Con sesion guardada para los tres: el preflight local exige token antes de
+  // llamar a mcporter, y estos tests prueban el comportamiento POSTERIOR.
+  writeFileSync(creds, JSON.stringify({ entries: {
+    "notion|1": { serverName: "notion", tokens: { accessToken: "x" } },
+    "quantfury|2": { serverName: "quantfury", tokens: { accessToken: "x" } },
+    "other|3": { serverName: "other", tokens: { accessToken: "x" } },
+  } }))
   env.MCP_CREDENTIALS = creds
   console.log("\nmcp.sh:")
   await t("status: avisa cuando el token esta guardado bajo OTRO nombre para la misma url (auth por URL)", async () => {
@@ -886,7 +903,7 @@ echo "unknown" >&2; exit 1
     const calls = join(dir, "calls.log")
     writeFileSync(fake, readFileSync(fake, "utf8").replace("#!/usr/bin/env bash\n", `#!/usr/bin/env bash\necho "$@" >> '${calls}'\n`))
     const r = mcp("status")
-    if (r.rc !== 0 || !/notion\s+sesion guardada/.test(r.out) || !/quantfury\s+sin autenticar/.test(r.out) || !/other\s+sin autenticar/.test(r.out)) throw new Error(r.out)
+    if (r.rc !== 0 || !/notion\s+sesion guardada/.test(r.out) || !/quantfury\s+sesion guardada/.test(r.out) || !/locked\s+sin autenticar/.test(r.out)) throw new Error(r.out)
     if (existsSync(calls)) throw new Error("status invoco a mcporter: " + readFileSync(calls, "utf8"))
   })
   await t("list: los servidores del catalogo, con si tienen politica propia", async () => {
@@ -939,11 +956,42 @@ echo "unknown" >&2; exit 1
     if (!r.out.includes(`mcp.sh call --write notion.notion-create-pages pages:='[{"properties": {"<name>": "<value>"}, "content": "<content>"}]'`)) throw new Error("sin ejemplo: " + r.out)
     if (mcp("describe", "notion.notion-spawn-session").rc === 0) throw new Error("describe mostro una tool deny")
   })
+  await t("mcporter viejo sin --no-oauth: mcp.sh detecta la capacidad y NO lo pasa (era 'Unknown flag')", async () => {
+    const oldEnv = { ...env, FAKE_MCPORTER_OLD: "1", FAKE_MCPORTER_VERSION: "0.9.0", TMPDIR: join(dir, "old") }
+    let out, rc = 0
+    try {
+      out = execFileSync("bash", [join(HERE, "..", "bin", "mcp.sh"), "call", "notion.notion-search", "query=x"], { encoding: "utf8", env: oldEnv, stdio: ["ignore", "pipe", "pipe"] })
+    } catch (e) {
+      rc = e.status; out = (e.stdout ?? "") + (e.stderr ?? "")
+    }
+    if (rc !== 0 || !out.includes("CALLED notion.notion-search")) throw new Error(rc + " " + out)
+    if (out.includes("Unknown flag")) throw new Error("paso --no-oauth a una version que no lo soporta")
+    // y la version nueva SI lo recibe
+    const newer = execFileSync("bash", [join(HERE, "..", "bin", "mcp.sh"), "call", "notion.notion-search", "query=x"], { encoding: "utf8", env: { ...env, TMPDIR: join(dir, "new") } })
+    if (!newer.includes("--no-oauth")) throw new Error("no paso --no-oauth con una version que lo soporta: " + newer)
+  })
+  await t("sin sesion guardada, `tools`/`call` no llegan a mcporter (rc 5) y piden el auth al usuario", async () => {
+    const noc = join(dir, "creds-empty.json")
+    writeFileSync(noc, JSON.stringify({ entries: {} }))
+    const e2 = { ...env, MCP_CREDENTIALS: noc }
+    for (const args of [["tools", "notion", "search"], ["call", "notion.notion-search", "query=x"]]) {
+      const calls = join(dir, "calls-preflight.log")
+      rmSync(calls, { force: true })
+      let out, rc = 0
+      try {
+        out = execFileSync("bash", [join(HERE, "..", "bin", "mcp.sh"), ...args], { encoding: "utf8", env: e2, stdio: ["ignore", "pipe", "pipe"] })
+      } catch (e) {
+        rc = e.status; out = (e.stdout ?? "") + (e.stderr ?? "")
+      }
+      if (rc !== 5 || !out.includes("has no saved login") || !out.includes("mcporter auth notion")) throw new Error(args[0] + ": " + rc + " " + out)
+      if (out.includes("CALLED")) throw new Error(args[0] + " llego a mcporter sin sesion guardada")
+    }
+  })
   await t("auth pendiente -> se lo pide al USUARIO y prohibe ejecutarlo (abre su navegador)", async () => {
-    const r = mcp("tools", "locked")
-    if (r.rc === 0 || !r.out.includes("mcporter auth locked") || !/never run it yourself/i.test(r.out)) throw new Error(r.out)
-    const c = mcp("call", "locked.x")
-    if (c.rc === 0 || !c.out.includes("mcporter auth locked") || !/never run it yourself/i.test(c.out)) throw new Error(c.out)
+    for (const args of [["tools", "locked"], ["call", "locked.x"]]) {
+      const r = mcp(...args)
+      if (r.rc === 0 || !r.out.includes("mcporter auth locked") || !/never run (it|that) yourself/i.test(r.out)) throw new Error(args[0] + ": " + r.out)
+    }
   })
   await t("errores del servidor -> pista accionable, nunca 'el MCP esta roto'", async () => {
     const r = mcp("call", "notion.notion-fetch", "id=x")

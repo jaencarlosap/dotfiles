@@ -6,3 +6,4 @@
 - All MCP servers go through mcp.sh (mcporter) with `mcp: {}` in opencode.jsonc; adding one = entry in mcporter/mcporter.json + policy.json + `mcporter auth <name>` — source: README 2026-09-18
 - mcporter reads a JSON body from stdin when it is not a TTY: every call from scripts uses stdin=/dev/null — source: bin/_mcp.py
 - mcporter stores a token under sha256(name+url)[:16] in $XDG_DATA_HOME/mcporter or ~/.mcporter; authenticating by URL instead of by name hides it, and changing a server's url retires it. Diagnose with mcp.sh doctor — source: mcporter dist/oauth-vault.js 2026-09-22
+- mcp.sh no debe depender de flags de mcporter: --no-oauth no existe en versiones < 0.13 y rompia cada call ('Unknown flag'). Se detecta la capacidad por version, se fija MCPORTER_OAUTH_NO_BROWSER=1 y hay preflight local del vault antes de invocar — source: reporte del segundo PC 2026-09-23
