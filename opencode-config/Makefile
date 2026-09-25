@@ -179,6 +179,32 @@ versions:
 	done
 	@echo "  pin = se instala exactamente esa (make mcporter) · ref = ultima verificada, informativa"
 
+## memory_vectors: Instala el embedder local (venv con fastembed, ~400MB) para la busqueda por significado; opcional
+.PHONY: memory_vectors
+memory_vectors:
+	@# Tercer nivel de la memoria: solo se usa cuando palabras+sinonimos y FTS5
+	@# no encuentran nada, porque arrancar el runtime cuesta 1-3 s. El venv vive
+	@# FUERA del repo (no se versionan 400 MB) y es 100% opcional.
+	@v="$${MEMORY_VENV:-$(HOME)/.cache/opencode-memory-venv}"; \
+	if [ -x "$$v/bin/python" ]; then echo "  ✅ embedder ya instalado en $$v"; \
+	else \
+		echo "  creando venv en $$v ..."; \
+		python3 -m venv "$$v" && "$$v/bin/pip" install -q fastembed && echo "  ✅ fastembed instalado"; \
+	fi
+	@MEMORY_VENV="$${MEMORY_VENV:-$(HOME)/.cache/opencode-memory-venv}" OPENCODE_MEMORY_DIR="$(REPO_DIR)/memory" python3 "$(REPO_DIR)/bin/_memory_index.py" embed
+	@MEMORY_VENV="$${MEMORY_VENV:-$(HOME)/.cache/opencode-memory-venv}" OPENCODE_MEMORY_DIR="$(REPO_DIR)/memory" python3 "$(REPO_DIR)/bin/_memory_index.py" stats
+
+## memory_status: Estado del indice de memoria (entradas, embeddings, umbral)
+.PHONY: memory_status
+memory_status:
+	@OPENCODE_MEMORY_DIR="$(REPO_DIR)/memory" python3 "$(REPO_DIR)/bin/_memory_index.py" stats
+	@OPENCODE_MEMORY_DIR="$(REPO_DIR)/memory" bash "$(REPO_DIR)/bin/memory.sh" check
+
+## mcp-snapshot: Guarda en el repo el esquema de las tools de los servidores autenticados (para que `tools`/`describe` funcionen sin sesion)
+.PHONY: mcp-snapshot
+mcp-snapshot:
+	@MCP_CATALOG="$(HOME)/.mcporter/mcporter.json" python3 "$(REPO_DIR)/bin/_mcp.py" snapshot
+
 ## mcp-status: Servidores MCP del catalogo: cuales tienen sesion guardada (lectura LOCAL; nunca abre el navegador)
 .PHONY: mcp-status
 mcp-status:

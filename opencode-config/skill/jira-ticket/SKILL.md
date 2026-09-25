@@ -227,33 +227,67 @@ invent an issue key. The point of the file is that a human reads it first.
 
 ### Phase 2 — only after an explicit "créalo en Jira" / "súbelo" / "adelante"
 
+**Presupuesto: 5 llamadas a `mcp.sh` como máximo para todo el paso 3.** Si a la
+quinta no está creado, paras y reportas — la iteración no lo arregla, y dar
+vueltas probando nombres de parámetros es el fallo más caro de este flujo.
+
 1. **Read the file.** The user may have edited it by hand since you wrote it —
    that is what the review step is for. What you send is what the file says
    **now**, not what you remember writing.
 2. If it still contains `[POR CONFIRMAR]`, say so in one line and ask whether to
    create it anyway. Sometimes the answer is yes; it is not your call.
-3. **Do you have a project key?** If not, ask — see the table. Never guess one.
-4. Run the command. **One call**, through `bash`. The tool is
-   `atlassian.createJiraIssue` behind `mcp.sh`; the first time in a session,
-   look at its real parameters, then call it with `--write` (the user gets the
-   permission prompt — that is the confirmation):
+3. **Do you have a project key?** If not, ask. Never guess one.
+4. **Los datos del servidor NO se adivinan: se leen una vez y se recuerdan.**
+   En este orden, y saltándote todo lo que ya sepas:
 
    ```bash
-   mcp.sh describe atlassian.createJiraIssue
-   mcp.sh call --write atlassian.createJiraIssue projectKey="ABC" issueTypeName="Story" \
-     summary="<the text after '# Titulo:', without the brackets>" \
-     description=@ticket-<short-description>.md
+   memory.sh search "jira cloudId projectKey issue type"   # ¿ya está guardado?
+   mcp.sh describe atlassian.createJiraIssue               # nombres EXACTOS de los parámetros
    ```
 
-   `cloudId` (if the tool asks for it) comes from `AGENTS.md` or from
-   `mcp.sh call atlassian.getAccessibleAtlassianResources` — never invented.
-5. On failure: report the error verbatim, in one line. Do not retry the same
-   call, and do not fall back to inventing a key. If it says `unauthorized` or
-   `auth required`, the user has to run `mcporter auth atlassian` once — say
-   exactly that.
-6. On success: the result has the issue `key`. Report it, and record it at the
-   top of the file (right under the title line) so the file and Jira do not
-   drift:
+   - Si `memory.sh` devuelve el `cloudId` y el tipo válido del proyecto, **no
+     vuelvas a pedirlos al servidor**. Ese es el 90 % del ahorro.
+   - Si no está y `describe` muestra un parámetro `cloudId` (o el error lo
+     pide): `mcp.sh call atlassian.getAccessibleAtlassianResources` — una vez.
+   - Si el tipo de issue es rechazado:
+     `mcp.sh call atlassian.getJiraProjectIssueTypesMetadata projectKey=ABC` —
+     una vez, y usas uno de los que devuelve.
+   - Cuando tengas `cloudId` y el tipo bueno, **guárdalos** para que la próxima
+     vez sea una sola llamada:
+
+     ```bash
+     memory.sh save "Jira: cloudId=<...>, proyecto ABC acepta issue types <...> — source: atlassian MCP"
+     ```
+
+5. **Una sola llamada de creación**, con los nombres que dio `describe`
+   (`projectKey`/`issueTypeName` son lo esperable, pero **manda lo que diga
+   `describe`**, no esta plantilla):
+
+   ```bash
+   mcp.sh call --write atlassian.createJiraIssue projectKey="ABC" issueTypeName="Story" \
+     summary="<el texto tras '# Titulo:', sin los corchetes>" \
+     description=@ticket-<descripcion-corta>.md
+   ```
+
+   `mcp.sh` valida las claves contra el esquema antes de enviar: si te dice
+   `unknown key(s) ...  Allowed: ...`, **corrige con esos nombres y llama una
+   vez más**; eso no cuenta como iteración, es la corrección que te está dando.
+
+6. **Si la creación falla, lee qué clase de error es y actúa una sola vez:**
+
+   | error | qué hacer |
+   | --- | --- |
+   | `unknown key(s) X. Allowed: ...` (validación local) | reenvía con los nombres permitidos |
+   | el servidor nombra un campo requerido que falta | añade solo ese campo |
+   | el tipo de issue no existe en el proyecto | `getJiraProjectIssueTypesMetadata` y reenvía con uno válido |
+   | `unauthorized` / `auth required` | para: el usuario debe correr `mcporter auth atlassian` (tú no lo ejecutas) |
+   | cualquier otro | **para** y reporta el error literal + que el ticket sigue en el fichero |
+
+   Nunca inventes una key (`ABC-123`), nunca digas "creado" sin la respuesta del
+   servidor, y nunca pruebes el mismo comando dos veces sin cambiar nada.
+
+7. **On success**: la respuesta trae la `key` real. Repórtala y anótala en el
+   fichero, bajo la línea del título, para que fichero y Jira no divergan:
 
    ```
    **Creado en Jira:** ABC-123
@@ -262,9 +296,10 @@ invent an issue key. The point of the file is that a human reads it first.
 ### The tool and its parameters
 
 Jira is reached through the Atlassian Rovo MCP server, from `bash`, via
-`mcp.sh` (see the "Tools on your PATH" rule). Parameter names come from
-`mcp.sh describe atlassian.createJiraIssue` **in the session** — the server
-changes them without notice, so this table is the intent, not the schema:
+`mcp.sh` (see the "Tools on your PATH" rule). **Esta tabla es la intención, no
+el esquema**: los nombres exactos los da `mcp.sh describe
+atlassian.createJiraIssue` en la sesión, y el servidor los cambia sin avisar.
+Si `describe` y esta tabla se contradicen, gana `describe`.
 
 | what | required | value, and where you get it |
 | --- | --- | --- |
@@ -285,6 +320,12 @@ Two rules for building the call:
 
 If Jira rejects the issue type, that project does not accept that value: the
 error message lists what it does accept.
+
+**Si la descripción llega a Jira como texto plano o con los `##` literales**,
+el servidor quiere otro formato para ese campo: hay una tool
+`atlassian.getContentFormatGuide` que lo explica — llámala **una vez**, aplica
+lo que diga y, si aun así no renderiza, dilo en una línea y deja el ticket en
+el fichero. No conviertas el Markdown a mano a otro formato inventado.
 
 To read a ticket or search: `mcp.sh tools atlassian jira` shows the read
 tools (`getJiraIssue`, `searchJiraIssuesUsingJql`, ...).
@@ -307,7 +348,9 @@ one against what you just wrote, before sending it:
 5. Is there any library, framework or key name nobody gave you?
    (`authToken`, `router.push`, React, axios...) → replace it with a neutral
    description or `[POR CONFIRMAR]`.
-6. **Is every word written in Spanish** — the file and the lines in the chat?
+6. ¿Te pasaste de 5 llamadas a `mcp.sh` en el paso 3? Entonces no sigas
+   probando: reporta el último error literal y que el ticket está en el fichero.
+7. **Is every word written in Spanish** — the file and the lines in the chat?
    If any part is in English, translate it.
 7. Is the ticket in a file named `ticket-<algo-corto>.md` in the current folder,
    with no code fence and no heading of your own around it?

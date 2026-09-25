@@ -13,3 +13,8 @@ bench/*-redtest/
 bench/*-newproj/
 bench/*-lookup/
 bench/*-ticket/
+
+# Indice de busqueda de la memoria: derivado de los .md, se reconstruye solo
+memory/index.db
+memory/index.db-*
+memory/recipes/*.bak

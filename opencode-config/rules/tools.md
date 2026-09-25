@@ -34,6 +34,15 @@ Rules that apply to all of them:
 - **Writes take the full text.** To save something (a page, a ticket, a
   note) put the whole content in the call — from a file with `k=@path` when
   it is long — never a summary of it.
+- **What worked, gets written down.** After a task that needed several attempts:
+  `memory.sh recipe <name>` (the working sequence) or `memory.sh save` (a single
+  fact). Both cost nothing until searched — unlike a skill, whose description is
+  paid every turn. Before starting a task that smells familiar, `memory.sh
+  search` it first.
+- **The shape of a tool is always available**, even with no session: the repo
+  keeps a schema snapshot, so `mcp.sh tools <server> <word>` and `mcp.sh
+  describe <server>.<tool>` always answer. Read the shape BEFORE the first
+  call to a tool in the session — guessing it costs more than reading it.
 - **MCP servers are discovered, not remembered.** `mcp.sh tools <server> <word>`
   costs ~50 tokens per matching tool — always pass a word (the whole list of a
   big server is ~1k tokens). Do it once per session per server, then call. A

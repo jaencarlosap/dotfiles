@@ -970,11 +970,34 @@ echo "unknown" >&2; exit 1
     const newer = execFileSync("bash", [join(HERE, "..", "bin", "mcp.sh"), "call", "notion.notion-search", "query=x"], { encoding: "utf8", env: { ...env, TMPDIR: join(dir, "new") } })
     if (!newer.includes("--no-oauth")) throw new Error("no paso --no-oauth con una version que lo soporta: " + newer)
   })
-  await t("sin sesion guardada, `tools`/`call` no llegan a mcporter (rc 5) y piden el auth al usuario", async () => {
+  await t("snapshot: con el esquema en el repo, `tools`/`describe` funcionan SIN sesion; `call` sigue pidiendo auth", async () => {
+    const { mkdirSync } = await import("fs")
+    const snapDir = join(dir, "schemas")
+    mkdirSync(snapDir, { recursive: true })
+    writeFileSync(join(snapDir, "notion.json"), JSON.stringify({ server: "notion", capturedAt: "2026-01-01T00:00:00Z", tools: [
+      { name: "notion-search", description: "Search", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
+    ] }))
+    const noSession = { ...env, MCP_CREDENTIALS: join(dir, "creds-none.json"), MCP_SCHEMAS: snapDir, TMPDIR: join(dir, "snap") }
+    writeFileSync(join(dir, "creds-none.json"), JSON.stringify({ entries: {} }))
+    const sh = (...args) => {
+      try { return { rc: 0, out: execFileSync("bash", [join(HERE, "..", "bin", "mcp.sh"), ...args], { encoding: "utf8", env: noSession, stdio: ["ignore", "pipe", "pipe"] }) } }
+      catch (e) { return { rc: e.status, out: (e.stdout ?? "") + (e.stderr ?? "") } }
+    }
+    const tl = sh("tools", "notion", "search")
+    if (tl.rc !== 0 || !tl.out.includes("notion-search(query: string)") || !tl.out.includes("schema snapshot")) throw new Error("tools no uso el snapshot: " + tl.rc + " " + tl.out)
+    const de = sh("describe", "notion.notion-search")
+    if (de.rc !== 0 || !de.out.includes("query: string")) throw new Error("describe no uso el snapshot: " + de.out)
+    const ca = sh("call", "notion.notion-search", "query=x")
+    if (ca.rc !== 5 || !ca.out.includes("mcporter auth notion")) throw new Error("call deberia exigir sesion: " + ca.rc + " " + ca.out)
+    // y sin snapshot ni sesion: mensaje que explica las dos salidas
+    const nothing = sh("tools", "locked")
+    if (nothing.rc === 0 || !nothing.out.includes("mcp.sh snapshot locked") || !nothing.out.includes("mcporter auth locked")) throw new Error(nothing.out)
+  })
+  await t("sin sesion guardada, `call` no llega a mcporter (rc 5) y pide el auth al usuario", async () => {
     const noc = join(dir, "creds-empty.json")
     writeFileSync(noc, JSON.stringify({ entries: {} }))
     const e2 = { ...env, MCP_CREDENTIALS: noc }
-    for (const args of [["tools", "notion", "search"], ["call", "notion.notion-search", "query=x"]]) {
+    for (const args of [["call", "notion.notion-search", "query=x"]]) {
       const calls = join(dir, "calls-preflight.log")
       rmSync(calls, { force: true })
       let out, rc = 0
@@ -984,14 +1007,15 @@ echo "unknown" >&2; exit 1
         rc = e.status; out = (e.stdout ?? "") + (e.stderr ?? "")
       }
       if (rc !== 5 || !out.includes("has no saved login") || !out.includes("mcporter auth notion")) throw new Error(args[0] + ": " + rc + " " + out)
+      if (out.includes("CALLED")) throw new Error("llego a mcporter sin sesion")
       if (out.includes("CALLED")) throw new Error(args[0] + " llego a mcporter sin sesion guardada")
     }
   })
   await t("auth pendiente -> se lo pide al USUARIO y prohibe ejecutarlo (abre su navegador)", async () => {
-    for (const args of [["tools", "locked"], ["call", "locked.x"]]) {
-      const r = mcp(...args)
-      if (r.rc === 0 || !r.out.includes("mcporter auth locked") || !/never run (it|that) yourself/i.test(r.out)) throw new Error(args[0] + ": " + r.out)
-    }
+    const c = mcp("call", "locked.x")
+    if (c.rc === 0 || !c.out.includes("mcporter auth locked") || !/never run (it|that) yourself/i.test(c.out)) throw new Error(c.out)
+    const tl = mcp("tools", "locked")
+    if (tl.rc === 0 || !tl.out.includes("mcporter auth locked")) throw new Error(tl.out)
   })
   await t("errores del servidor -> pista accionable, nunca 'el MCP esta roto'", async () => {
     const r = mcp("call", "notion.notion-fetch", "id=x")
@@ -1006,6 +1030,26 @@ echo "unknown" >&2; exit 1
     if (amb.rc === 0 || !amb.out.includes("exists in several servers") || !amb.out.includes("other.notion-search")) throw new Error("no detecto la ambiguedad: " + amb.out)
     const r2 = mcp("call", "nada-de-nada", "query=x")
     if (r2.rc === 0 || !r2.out.includes("no server has a tool named that")) throw new Error(r2.out)
+  })
+  await t("validacion local: avisa de los parametros REQUERIDOS que faltan antes de enviar", async () => {
+    const r = mcp("call", "--write", "notion.notion-create-pages", "creation_mode=draft")
+    if (r.rc !== 4 || !r.out.includes("missing required parameter(s): pages")) throw new Error(r.rc + " " + r.out)
+    if (r.out.includes("CALLED")) throw new Error("lo envio sin el parametro requerido")
+  })
+  await t("la MISMA llamada fallida no se repite una tercera vez (rc 6) y recuerda lo ya probado", async () => {
+    const e3 = { ...env, TMPDIR: join(dir, "loop") }
+    const bad = ["call", "notion.notion-fetch", "id=x"]   // el fake falla siempre en notion-fetch
+    const outs = []
+    for (let i = 0; i < 3; i++) {
+      try {
+        outs.push({ rc: 0, out: execFileSync("bash", [join(HERE, "..", "bin", "mcp.sh"), ...bad], { encoding: "utf8", env: e3, stdio: ["ignore", "pipe", "pipe"] }) })
+      } catch (e) {
+        outs.push({ rc: e.status, out: (e.stdout ?? "") + (e.stderr ?? "") })
+      }
+    }
+    if (!/attempt 2 of this exact call/.test(outs[1].out)) throw new Error("no avisa en el segundo intento: " + outs[1].out)
+    if (outs[2].rc !== 6 || !/already failed 2 times/.test(outs[2].out)) throw new Error("no corto el tercero: " + outs[2].rc + " " + outs[2].out)
+    if (/CALLED/.test(outs[2].out)) throw new Error("el tercer intento llego a mcporter")
   })
   await t("validacion local: clave desconocida en pages[0] o parametro inexistente -> no se envia (rc 4) y dice la correccion", async () => {
     const r = mcp("call", "--write", "notion.notion-create-pages", 'pages:=[{"title":"x","content":"y"}]')
@@ -1043,9 +1087,13 @@ echo "unknown" >&2; exit 1
   const repo = tmp("memrepo")
   const gmem = tmp("memglobal")
   const M = join(HERE, "..", "bin", "memory.sh")
+  // Sin embedder ni indice salvo que el test lo pida: estos tests prueban el
+  // comportamiento de memory.sh, no la red a pcgamer, y deben dar lo mismo en
+  // cualquier maquina.
+  const offlineMem = { MEMORY_EMBED_URL: "http://127.0.0.1:1/x", MEMORY_VENV: "/nonexistent", MEMORY_INDEX_MIN: "999999" }
   const m = (...args) => {
     try {
-      return { rc: 0, out: execFileSync("bash", [M, ...args], { cwd: repo, encoding: "utf8", env: { ...process.env, OPENCODE_MEMORY_DIR: gmem }, stdio: ["ignore", "pipe", "pipe"] }) }
+      return { rc: 0, out: execFileSync("bash", [M, ...args], { cwd: repo, encoding: "utf8", env: { ...process.env, OPENCODE_MEMORY_DIR: gmem, ...offlineMem }, stdio: ["ignore", "pipe", "pipe"] }) }
     } catch (e) {
       return { rc: e.status, out: (e.stdout ?? "") + (e.stderr ?? "") }
     }
@@ -1089,6 +1137,96 @@ echo "unknown" >&2; exit 1
     if (r.rc !== 0 || !r.out.includes("gin v1.12") || !r.out.includes("compose v2")) throw new Error("no encontro en los dos ambitos: " + r.out)
     if (!r.out.includes("memory/topics/docker.md")) throw new Error("no acorta la ruta global")
     if (!m("search", "zzz-nada").out.includes("no match")) throw new Error("no dice que no hay nada")
+  })
+  await t("recipe: guarda un procedimiento multilinea y aparece en index y en search", async () => {
+    const steps = "Crear algo\n\n1. primer comando\n2. segundo comando\n\nGotcha: no usar inline\n"
+    const f = join(repo, "steps.md")
+    writeFileSync(f, steps)
+    try {
+      execFileSync("bash", ["-c", `"${join(HERE, "..", "bin", "memory.sh")}" recipe mi-receta < "${f}"`], { cwd: repo, encoding: "utf8", env: { ...process.env, OPENCODE_MEMORY_DIR: gmem } })
+    } catch (e) { throw new Error((e.stdout ?? "") + (e.stderr ?? "")) }
+    if (!existsSync(join(gmem, "recipes", "mi-receta.md"))) throw new Error("no creo la receta")
+    if (!m("index").out.includes("mi-receta")) throw new Error("index no la lista: " + m("index").out)
+    const r = m("search", "gotcha", "inline")
+    if (!r.out.includes("mi-receta")) throw new Error("search no la encuentra: " + r.out)
+    if (m("recipe", "mala/ruta").rc === 0) throw new Error("acepto un nombre con ruta")
+  })
+  await t("save avisa cuando el hecho ya esta dicho con otras palabras (no bloquea)", async () => {
+    m("save", "--topic", "dup", "The vault key is sha256 of name plus url, so authenticating by URL hides the token")
+    const r = m("save", "--topic", "dup", "vault key is sha256 name url authenticating by URL hides token")
+    if (!r.out.includes("parecido a la linea") || !r.out.includes("ya estan ahi")) throw new Error("no aviso del parecido: " + r.out)
+    if (!r.out.includes("saved ->")) throw new Error("bloqueo el guardado; solo debe avisar")
+    const nuevo = m("save", "--topic", "dup", "Docker.raw only shrinks after Docker Desktop restarts")
+    if (nuevo.out.includes("parecido a la linea")) throw new Error("aviso de un hecho sin relacion: " + nuevo.out)
+  })
+  await t("check: detecta entradas que nombran ficheros o comandos que ya no existen", async () => {
+    m("save", "--topic", "stale", "Use bin/borrado.sh for this and run inexistente-cli --help")
+    const r = m("check")
+    if (r.rc !== 0) throw new Error(r.out)
+    if (!r.out.includes("bin/borrado.sh") || !r.out.includes("nombran algo que ya no existe")) throw new Error("no detecto lo obsoleto: " + r.out)
+    const ok = m("search", "zzz-nada")   // no rompe nada
+    if (ok.rc !== 0) throw new Error(ok.out)
+    if (ok.out.includes("Traceback")) throw new Error("la busqueda revento: " + ok.out)
+  })
+  await t("el motor se elige solo: con embedder -> indice hibrido; sin embedder -> palabras o FTS5 segun tamano", async () => {
+    const { mkdirSync } = await import("fs")
+    const big = tmp("membig")
+    mkdirSync(join(big, "topics"), { recursive: true })
+    const lines = ["# synthetic", ""]
+    for (let i = 0; i < 200; i++) lines.push(`- Fact ${i}: the deploy of the queue must be retried before webhook — source: test`)
+    lines.push("- Fact special: the cursor of the shard must be migrated — source: test")
+    writeFileSync(join(big, "topics", "synthetic.md"), lines.join("\n") + "\n")
+    const run = (env2, ...args) => {
+      try { return { rc: 0, out: execFileSync("bash", [join(HERE, "..", "bin", "memory.sh"), ...args], { cwd: big, encoding: "utf8", env: { ...process.env, OPENCODE_MEMORY_DIR: big, ...env2 } }) } }
+      catch (e) { return { rc: e.status, out: (e.stdout ?? "") + (e.stderr ?? "") } }
+    }
+    // sin embedder alcanzable, el umbral decide: 201 entradas -> FTS5
+    const offline = { MEMORY_EMBED_URL: "http://127.0.0.1:1/x", MEMORY_VENV: "/nonexistent" }
+    const withIndex = run(offline, "search", "cursor", "shard")
+    if (!withIndex.out.includes("via fts5")) throw new Error("no uso FTS5 pasado el umbral: " + withIndex.out)
+    if (!withIndex.out.includes("Fact special")) throw new Error("el indice no encontro el hecho: " + withIndex.out)
+    // sin embedder y por debajo del umbral, el respaldo por palabras
+    const noIndex = run({ ...offline, MEMORY_INDEX_MIN: "9999" }, "search", "cursor", "shard")
+    if (noIndex.out.includes("via fts5")) throw new Error("uso el indice sin embedder y por debajo del umbral: " + noIndex.out)
+    if (!noIndex.out.includes("Fact special")) throw new Error("el respaldo lexico no encontro el hecho: " + noIndex.out)
+    // el indice se reconstruye cuando cambia un fichero
+    writeFileSync(join(big, "topics", "synthetic.md"), lines.concat(["- Fact nuevo: the tenant of the shard must be isolated — source: test"]).join("\n") + "\n")
+    const after = run(offline, "search", "tenant", "isolated")
+    if (!after.out.includes("Fact nuevo")) throw new Error("no se reconstruyo al cambiar el fichero: " + after.out)
+    // el indice es derivado: borrarlo no pierde nada
+    rmSync(join(big, "index.db"), { force: true })
+    const rebuilt = run(offline, "search", "tenant", "isolated")
+    if (!rebuilt.out.includes("Fact nuevo")) throw new Error("no se regenero tras borrar index.db: " + rebuilt.out)
+  })
+  await t("vectores de otra dimension (cambio de embedder) no revientan la busqueda", async () => {
+    // Paso de verdad al migrar de MiniLM (384) a Qwen3-Embedding (1024): numpy
+    // fallaba con "inhomogeneous shape" y la busqueda entera moria.
+    const { mkdirSync } = await import("fs")
+    const d = tmp("memdim")
+    mkdirSync(join(d, "topics"), { recursive: true })
+    writeFileSync(join(d, "topics", "t.md"), "# t\n\n- un hecho sobre tenants aislados\n")
+    const env2 = { ...process.env, OPENCODE_MEMORY_DIR: d }
+    const py = (...a) => {
+      try { return { rc: 0, out: execFileSync("python3", [join(HERE, "..", "bin", "_memory_index.py"), ...a], { encoding: "utf8", env: env2 }) } }
+      catch (e) { return { rc: e.status, out: (e.stdout ?? "") + (e.stderr ?? "") } }
+    }
+    py("build")
+    // vector de dimension distinta, a mano
+    const sqlite = `
+import sqlite3,array
+db=sqlite3.connect("${join(d, "index.db")}")
+db.execute("update facts set emb=? where id=(select min(id) from facts)",[sqlite3.Binary(array.array('f',[0.1]*384).tobytes())])
+db.execute("insert into facts(file,line,text,emb) values('x',1,'otro',?)",[sqlite3.Binary(array.array('f',[0.2]*1024).tobytes())])
+db.commit()`
+    execFileSync("python3", ["-c", sqlite])
+    const r = py("search", "tenants")
+    if (r.out.includes("Traceback") || r.rc !== 0) throw new Error("revento con dimensiones mezcladas: " + r.rc + " " + r.out)
+    if (!r.out.includes("tenants aislados")) throw new Error("perdio el resultado por culpa de un vector incompatible: " + r.out)
+  })
+  await t("index --stats dice el estado y si el nivel vectorial esta apagado", async () => {
+    const r = m("index", "--stats")
+    if (r.rc !== 0 || !r.out.includes("entradas indexadas") || !r.out.includes("umbral FTS5")) throw new Error(r.out)
+    if (!/embedder\s+:/.test(r.out)) throw new Error("no dice si hay embedder: " + r.out)
   })
   await t("index e show <topic>", async () => {
     if (!m("index").out.includes("docker (1")) throw new Error("index no lista el topic")

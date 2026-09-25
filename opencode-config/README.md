@@ -60,11 +60,15 @@ make restore       # restaura el ultimo respaldo
 | `test/plugins.mjs`       | Tests de ambos (`make test-plugins`). Fuera de `plugin/` a proposito: opencode carga como plugin lo que hay ahi dentro. |
 | `bin/docs.sh`            | Consulta de paquetes (npm/PyPI/crates/go/MDN/wiki)         |
 | `bin/web.sh`             | Busqueda web (`search`) y lectura de una pagina (`read`)   |
-| `bin/memory.sh`          | Memoria en ficheros: `save` / `promote` / `search` / `show` (repo y global) |
+| `bin/memory.sh`          | Memoria en ficheros: `save` / `recipe` / `promote` / `search` / `show` / `index` / `check` (repo y global) |
+| `bin/_memory_index.py`   | Indice derivado (SQLite FTS5 + embeddings del modelo local, fusion RRF): `build` / `embed` / `stats` / `search`. `memory/index.db` es borrable |
+| `test/memory-retrieval.json` `.py` | 24 preguntas con su respuesta esperada: mide el acierto de cada variante de busqueda (fue lo que decidio quitar la tabla de sinonimos) |
+| `memory/recipes/*.md`    | Procedimientos que funcionaron (una receta = la secuencia probada). 0 tokens/turno: se buscan, no se inyectan |
 | `bin/mcp.sh` + `bin/_mcp.py` | TODOS los MCP por bash sobre mcporter: `list` / `tools` / `describe` / `call [--write]`, con politica |
 | `mcporter/mcporter.json` | Catalogo de servidores MCP (symlink a `~/.mcporter/mcporter.json`); credenciales fuera del repo |
 | `mcporter/policy.json`   | Por servidor: `deny` (no existe) y `write` (exige `--write` -> `ask`); `default` para los demas |
 | `mcporter/pin.json`      | Version FIJADA de mcporter (+ referencias de gh/herdr/opencode/node). `make mcporter` instala esa; `make versions` compara |
+| `mcporter/schemas/*.json`| Esquema de las tools de cada servidor MCP, capturado con `mcp.sh snapshot`: `tools`/`describe` y la validacion funcionan SIN sesion |
 | `memory/`                | Memoria GLOBAL versionada: `preferences.md` (siempre en contexto) y `topics/*.md` (bajo demanda) |
 | `bin/webfetch`, `bin/websearch` | Alias de shell para dos nombres de HERRAMIENTA que el modelo escribe en bash |
 | `skill/review-changes/`  | Skill: auditar un diff — verificar lo que afirma y que se quedo sin actualizar |
@@ -118,6 +122,291 @@ lista, deja el ticket en fichero y no lo sube (ya lo contemplaba).
   ordenadas), copia el plugin a `~/.config/opencode/plugins/` y crea un
   `tui.json`; su plugin usa globales de Bun y exporta una factory con nombre,
   asi que los tests de carga de `test/plugins.mjs` lo rechazarian.
+
+## 🔓 `auto` volvio a ser automatico: la friccion era `external_directory` — 2026-09-25
+
+Sintoma: "auto pide permiso para muchas cosas y ya no itera solo". El log dio el
+reparto exacto — **14 `ask` en todo el historial**, y 8 eran pruebas de
+`sudo -n true` hechas aqui:
+
+| lo que pedia | veces | legitimo |
+| --- | --- | --- |
+| `external_directory` en `~/.config/opencode/bin/*`, `.../memory/*`, `~/*` | 5 | **no**: son rutas del propio setup |
+| `git push` | 2 | si |
+| `mcp.sh call --write` | 1 | si |
+
+O sea: el agente pedia permiso para usar **sus propias herramientas**. Cada
+`memory.sh search` o `mcp.sh list` lanzado desde otro repo toca
+`~/.config/opencode/...`, y con `external_directory: {"*": "ask"}` eso era un
+prompt. No protegia nada y cortaba la iteracion.
+
+Arreglo: allowlist de lo que es nuestro —`~/.config/opencode/**`,
+`~/.mcporter/**`, `~/.cache/opencode-memory-venv/**`,
+`~/.local/share/opencode/**`— manteniendo `*: ask` para todo lo demas. Y como
+`~/.mcporter/` guarda tokens, se añade a `permission.read` un `deny` para
+`*credentials.json` y `*mcp-auth.json`: que `mcp.sh` los lea para saber si hay
+sesion, si; que el agente los abra con la tool `read`, no (mismo criterio que
+los `.env`).
+
+Verificado con una sesion real: `memory.sh search "mcporter"` y `mcp.sh list`
+se ejecutan con `action=allow`, sin prompt; `git push origin main` sigue en
+`ask`. Los `ask` que quedan son los que se pidieron a proposito: escrituras en
+servicios externos (`mcp.sh call --write`), logins (`mcporter auth`,
+`gh auth login`), y lo destructivo o publicado (`rm -rf`, `git push`,
+`git reset --hard`, `sudo`, `gh pr merge|close`, `gh repo delete`).
+
+Y la leccion de configuracion, que ya costo dos veces: **en el frontmatter de un
+agente solo va lo que DIFIERE del global**. Un `bash: allow` ahi anulaba todos
+los `ask` globales (se descubrio con `sudo -n true` pasando como allow); la
+respuesta correcta no es devolver ese `allow`, es afinar los patrones globales.
+
+## 🎯 Busqueda hibrida con el embedder local: fuera la tabla de sinonimos — 2026-09-25
+
+El experimento del 24 fallo por el MODELO, no por los vectores. Con
+**Qwen3-Embedding-0.6B servido por llama-swap** (entrada propia `qwen-embed`,
+`--embeddings --pooling last`, 1024 dims) las mismas preguntas que el MiniLM
+del venv fallaba se aciertan:
+
+| consulta | MiniLM (venv, 384d) | Qwen3-Embedding (local, 1024d) |
+| --- | --- | --- |
+| `quien debe autenticar` | ❌ 0.272 | ✅ 0.488 |
+| `who should authenticate` (en ingles) | ❌ 0.254 | ✅ 0.545 |
+| `como libero espacio en disco` | ❌ devolvia Jira | ✅ 0.582 |
+| `donde se guarda el token` | — | ✅ 0.622 |
+
+Latencia: **150-230 ms por consulta en caliente** (1.5 s la primera, por el
+swap del modelo), frente a 1-3 s del venv. Y cero dependencias en el Mac: se
+usa el modelo que ya esta servido.
+
+### El test que decidio, y el resultado
+
+`test/memory-retrieval.json` + `test/memory-retrieval.py`: **24 preguntas** con
+el fragmento que debe aparecer, mezclando conceptuales ("por que se abre el
+navegador") con identificadores (`--no-oauth`, `createJiraIssue`).
+
+| variante | acierto |
+| --- | --- |
+| lexico con tabla de sinonimos | 19/24 (79%) |
+| FTS5 solo | 13/24 (54%) |
+| **hibrido FTS5 + vectorial, SIN tabla** | **22/24 (92%)** |
+
+Con eso, **la tabla de sinonimos se elimino** (21 grupos + stopwords, ~45
+lineas de vocabulario que habia que mantener a mano). Lo que queda:
+
+- **Camino normal: el indice hibrido.** FTS5 y vectorial se fusionan con RRF
+  (*Reciprocal Rank Fusion*), que es como se combinan dos rankings cuyas
+  puntuaciones no son comparables (BM25 vs coseno). Ninguno gana solo: el
+  lexico no sabe que "credenciales" es "login", el vectorial no distingue
+  `--no-oauth` de `--no-browser`.
+- **Respaldo sin red ni indice**: coincidencia por palabras, acentos ignorados
+  y compuestos partidos (`auth/login` -> `auth`, `login`). Mide 12/24, asi que
+  es peor — pero es el caso de "pcgamer apagado", no el normal.
+- **Embeddings en segundo plano al guardar**: `memory.sh save` y `recipe`
+  lanzan el `embed` sin esperar, asi que un hecho nuevo queda buscable por
+  significado sin coste para quien lo guarda. Los 38 hechos existentes se
+  embebieron en 1.4 s.
+- El embedder se elige solo: HTTP al servidor -> venv local -> ninguno (y
+  entonces solo lexico). `memory.sh index --stats` dice cual esta activo.
+
+Y un bug que salio al migrar de embedder, que cualquiera se encontrara al
+cambiarlo: la base tenia vectores de **384 dims (MiniLM) mezclados con los de
+1024 (Qwen3)** y numpy moria con *"inhomogeneous shape"*, tumbando la busqueda
+entera. Dos defensas: `meta.embedder` guarda que modelo produjo los vectores y
+al detectar un cambio los invalida (se rehacen solos), y `vector_search`
+descarta los que no coinciden con la dimension **de la consulta** — no con la
+mayoritaria, que era mi primer intento y seguia fallando cuando habia empate.
+Con test de regresion.
+
+Las dos preguntas que aun falla el hibrido (`donde se guarda el token de
+mcporter`, `plugins de opencode y globales de bun`) fallan porque el hecho
+correcto usa palabras que no estan ni en la pregunta ni cerca en el espacio
+vectorial; se arreglan reescribiendo el hecho, no el buscador.
+
+## 🔍 Memoria que escala en tres niveles (y el vectorial, medido) — 2026-09-24
+
+Pedido: memoria que escale sola y busqueda vectorial. Implementado, y **con el
+dato de que el vectorial no fue lo que mejoro los resultados**.
+
+Los `.md` siguen siendo la fuente de verdad. Encima hay un indice DERIVADO y
+borrable (`memory/index.db`, gitignored) y tres niveles que elige el tamano, no
+el usuario:
+
+| nivel | cuando | coste |
+| --- | --- | --- |
+| 1. palabras + sinonimos (en `memory.sh`) | <150 entradas | ~130 ms, 0 dependencias |
+| 2. SQLite **FTS5** (BM25) | desde `MEMORY_INDEX_MIN`=150 | ~280 ms; el indice se reconstruye solo si cambia un `.md` (hash de mtimes) y si se borra, se regenera |
+| 3. **vectorial** (embeddings + coseno con numpy) | solo si el lexico no encontro nada | 1-3 s de arranque; venv opcional FUERA del repo (`make memory_vectors`, ~400 MB) |
+
+Verificado con 201 hechos sinteticos: por debajo del umbral usa palabras, por
+encima dice `(N via fts5)`, se reconstruye al editar un fichero y se regenera
+tras borrar `index.db`. Tests: 115.
+
+### Lo que dijo la medicion del nivel 3
+
+Con `paraphrase-multilingual-MiniLM` (384d, 220 MB) y 38 hechos reales, seis
+preguntas en español con respuesta conocida: **lexico 4/6, con vectorial 4/6**.
+No aporto nada, y en algun caso ordenaba peor. Las similitudes explican por que:
+
+| consulta | hecho correcto | similitud |
+| --- | --- | --- |
+| `quien debe autenticar` | "Never run auth/login commands…" | 0.272 (ganaba uno de commits) |
+| `who should authenticate` (en ingles) | el mismo | 0.254 |
+| `database property names` | "Pages inside a database…" | 0.801 ✅ |
+
+O sea: el modelo es de tipo *paraphrase* (frases cortas parecidas), no de
+recuperacion query->pasaje, y los hechos son largos y con jerga. El umbral se
+subio a 0.40 (medido: acierto 0.42-0.62, ruido 0.24-0.33) para que diga "nada
+suficientemente parecido" en vez de devolver lo menos malo.
+
+**Lo que si subio el acierto a 6/6 fue arreglar el nivel 1**, y salio de mirar
+por que fallaba cada consulta:
+
+1. `auth/login` y `mcp.sh` se tokenizaban como UNA palabra, asi que buscar
+   `auth` no encontraba `auth/login`. Ahora se guardan el token entero y sus
+   piezas.
+2. Faltaban formas verbales españolas (`autenticar`, `autenticacion`) y grupos
+   de dominio (property/propiedad, database/base/datos, disk/disco/espacio).
+3. **Palabras vacias**: "quien debe autenticar" traia un hecho cualquiera que
+   contenia "debe". Ahora solo puntuan los terminos con contenido.
+
+Conclusion practica: el nivel 3 queda implementado y **apagado por defecto**
+(sin `make memory_vectors` no existe). Cuando haya ~200 hechos vale la pena
+reintentarlo con un modelo de recuperacion de verdad (E5 con prefijos
+`query:`/`passage:`, o BGE-M3) y volver a medir con el mismo test de 6
+preguntas. Con 38 hechos, el metodo barato gana.
+
+## 📚 Lo aprendido va a MEMORIA, no a skills — 2026-09-24
+
+La idea de "una skill por cada cosa aprendida" se descarto con el numero
+delante: cada skill cuesta su descripcion en **cada turno**, la use o no.
+Medido hoy, las 12 skills del repo suman **1.640 tok/turno**, y **8 de ellas
+nunca se han cargado** (1.047 tok/turno pagados por descripciones que no han
+disparado nada; las cargas registradas en todas las sesiones son 5:
+`web-research` x2, `enough-context`, `jira-ticket`, `explore-codebase`).
+
+Regla que queda:
+
+| lo que aprendes | donde va | coste/turno |
+| --- | --- | --- |
+| un hecho, un quirk, un parametro que funciono | `memory/topics/*.md` | **0** |
+| **una receta**: la secuencia de comandos que funciono, con sus trampas | `memory/recipes/<name>.md` (`memory.sh recipe`) | **0** |
+| una forma de trabajar que el modelo no sabria ni que buscar | `skill/` | ~150, para siempre |
+
+Mejoras de `memory.sh` en esta ronda:
+
+- **`recipe <name> < pasos.md`**: guarda un procedimiento multilinea (no cabe en
+  un "hecho por linea"). Entra en `search` e `index` como todo lo demas.
+- **Aviso de duplicado difuso** al guardar: si >=60% de las palabras del hecho
+  nuevo ya estan en uno existente, lo dice con el numero de linea y **no
+  bloquea** (puede ser un matiz). Primero se probo con Jaccard y no detectaba el
+  caso tipico —un hecho corto que repite uno largo— por la diferencia de
+  longitud; ahora es cobertura del hecho nuevo.
+- **`check`**: busca entradas que nombran ficheros o comandos **que ya no
+  existen**. En la primera ejecucion encontro una real: un hecho citaba
+  `notion.sh`, borrado al migrar a MCP. Un hecho obsoleto se lee como verdad,
+  asi que es peor que no tenerlo.
+- **`index`** ahora separa topics y recetas, con conteo y primera linea.
+
+## 🧠 Busqueda de memoria por sinonimos, y hasta donde escalar — 2026-09-24
+
+Medido con 29 hechos (6 KB, cinco ficheros): la busqueda por substring fallaba
+donde importa. `auth` daba 7 resultados pero **`credenciales` y `esquema` daban
+0**, aunque los hechos existen — estan escritos en ingles (`login`, `shape`)
+porque esa es la regla del repo, y las preguntas llegan en español.
+
+Arreglo en `bin/memory.sh` (~40 lineas, cero dependencias): grupos de formas
+equivalentes (auth/login/credenciales/token/sesion, schema/esquema/shape/forma,
+context/contexto/turno...), acentos ignorados, plural/singular, y puntuacion —
+el termino literal vale 2, un sinonimo 1, y se ordena por eso. Resultado:
+`credenciales` 0 -> 8, `esquema` 0 -> 6, `contexto` 0 -> 2.
+
+Un detalle que costo una iteracion: al principio se comparaba por substring y
+`auth` casaba dentro de **"Co-Authored-By"**, colando un hecho sobre commits en
+cada busqueda de credenciales. Ahora se compara por PALABRA (formas de <5
+caracteres exigen palabra exacta; las mas largas admiten prefijo).
+
+### Umbrales para escalar (decidir con el dato, no con la intuicion)
+
+Se evaluaron SQLite+FTS5, sqlite-vec, Qdrant y mem0/engram. Con 29 hechos y una
+busqueda que tarda **126 ms**, cualquiera es mas maquina que problema. El orden:
+
+| cuando | que | por que ahora no |
+| --- | --- | --- |
+| hoy | ficheros + sinonimos | 126 ms, la verdad vive en git y se cura en el diff |
+| ~200 hechos, o una busqueda devuelve >20 lineas | **SQLite + FTS5** como indice DERIVADO de los `.md` | FTS5 da ranking BM25 y ya viene en el Python del sistema (3.45.3, verificado). No resuelve sinonimos por si solo: seguiria haciendo falta la tabla |
+| si con FTS5 aun fallan busquedas por vocabulario | **sqlite-vec** + embeddings locales | verificado que carga y corre KNN con el Python de Homebrew (3.53.4; el del framework NO puede cargar extensiones). Embeddings: llama-swap responde `501 no embeddings`, hay que levantar un modelo o usar fastembed por CPU |
+| memoria compartida entre maquinas en tiempo real, o >100k vectores | Qdrant (o mem0 sobre Qdrant) en `amaris` | añade un servicio con estado que debe estar vivo cuando el agente busca; los hechos saldrian de git y se pierde la curacion por diff |
+
+Nota sobre el contexto: una base de datos **no ahorra tokens**. Lo que se paga
+es lo que se inyecta (`preferences.md` 73 tok/turno y `.agent/memory.md` <=500),
+no lo que se guarda; los `topics/` solo se leen cuando se buscan.
+
+## 📎 El esquema de las tools se versiona: saber la forma no exige sesion — 2026-09-24
+
+Pregunta del usuario: *"¿no deberia el modelo ser independiente sin tener que
+autenticar?"*. Media razon: **la sesion hace falta para USAR un servidor, no
+para saber como se llama a sus tools**. Eso segundo lo daba el servidor en cada
+sesion, asi que en una maquina sin auth el modelo no podia ni leer la forma y
+la adivinaba (de ahi la iteracion en los tickets).
+
+Ahora el esquema vive en el repo: `mcp.sh snapshot <server>` (o
+`make mcp-snapshot`, o `mcp.sh snapshot` para todos los autenticados) guarda
+`mcporter/schemas/<server>.json` con nombre, descripcion e `inputSchema` de
+cada tool. `mcp.sh` lo usa cuando no hay sesion o no hay red, y lo dice:
+`[schema snapshot 2026-09-24T13:56:29Z, no session needed to read it]`.
+
+Reparto de responsabilidades que queda:
+
+| | necesita sesion |
+| --- | --- |
+| `mcp.sh tools` / `describe` / validacion de argumentos | **no** (snapshot del repo) |
+| `mcp.sh call` | si — y si falta, rc 5 sin tocar la red |
+
+Efecto en la independencia del modelo: en una maquina recien clonada puede leer
+la forma exacta, construir la llamada bien a la primera y, si no hay sesion,
+decir exactamente que le falta al usuario. Notion ya esta capturado (45 tools,
+440 KB); falta `atlassian` — hay que correr `mcp.sh snapshot atlassian` en la
+maquina que si esta autenticada y commitear el fichero.
+
+## 🎫 Los tickets iteraban: presupuesto, memoria y corte de repeticion — 2026-09-24
+
+Crear un ticket funcionaba con el MCP propio de Jira y con el nuevo empezo a
+dar vueltas. La razon no es el formato: **el Rovo MCP necesita datos del
+servidor antes de crear** (`getAccessibleAtlassianResources` -> cloudId,
+`getJiraProjectIssueTypesMetadata` -> tipos validos del proyecto,
+`getContentFormatGuide` -> formato del campo descripcion), y el modelo los
+descubria a base de prueba y error en cada sesion.
+
+En la skill `jira-ticket`, paso 3 reescrito:
+
+- **Presupuesto explicito: 5 llamadas a `mcp.sh`.** Pasado eso, para y reporta.
+- **Orden fijo**: `memory.sh search` primero (¿ya sabemos cloudId/tipos?) ->
+  `describe` para los nombres exactos -> solo si hace falta,
+  `getAccessibleAtlassianResources` / `getJiraProjectIssueTypesMetadata` (una
+  vez cada uno) -> **una** llamada de creacion.
+- **Lo aprendido se guarda**: `memory.sh save "Jira: cloudId=..., ABC acepta
+  issue types ..."`. La siguiente vez es una sola llamada; ese es el 90% del
+  ahorro.
+- **Tabla de errores -> accion unica** (clave desconocida, campo requerido,
+  tipo invalido, `unauthorized`, cualquier otro -> parar).
+- `describe` manda sobre la tabla de la skill si se contradicen, y si la
+  descripcion no renderiza en Jira hay una salida acotada
+  (`getContentFormatGuide`, una vez).
+
+Y en `mcp.sh`, para que no dependa de que el modelo se acuerde:
+
+- **Requeridos que faltan**: se detectan en local antes de enviar
+  (`missing required parameter(s): pages`, rc 4).
+- **Corte de repeticion por tool**: se recuerda (argumentos -> error) en
+  `$TMPDIR`; el segundo intento identico avisa *"attempt 2 of this exact call.
+  STOP guessing: run mcp.sh describe ..."* y el tercero **no se envia** (rc 6).
+  Un exito borra ese historial. El `loop-breaker` no cubria esto porque el
+  comando cambiaba un poco en cada intento; aqui la clave son los argumentos
+  normalizados, no el texto del comando.
+
+109 tests. Lo que sigue pendiente de datos reales: los nombres exactos de los
+parametros de `createJiraIssue` (aqui no hay `mcporter auth atlassian`), asi
+que la tabla de la skill sigue siendo intencion y `describe` la autoridad.
 
 ## 🧱 `mcp.sh` deja de depender de la version de mcporter — 2026-09-23
 

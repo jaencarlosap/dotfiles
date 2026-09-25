@@ -38,6 +38,7 @@ USAGE = """mcp.sh — every MCP server you have, as commands. Run with bash.
   mcp.sh status                        which servers have a saved login (local file; never opens a browser)
   mcp.sh check [server]                connect for real (no OAuth) and report how many tools each exposes
   mcp.sh doctor                        why a server still asks for auth: vault path, expected key, stray entries
+  mcp.sh snapshot [server]             save its tool schemas into the repo (so `tools`/`describe` work with no session)
 
 Rules: the output is the fact — ids, URLs and numbers come from it, never from
 you. A tool `tools` does not list cannot be called. If a call says
@@ -142,22 +143,85 @@ def need_login(server):
         f"Never run that yourself: it opens their browser and blocks. Diagnose with: mcp.sh doctor", 5)
 
 
-def tools_json(server):
+SCHEMA_DIR = os.environ.get("MCP_SCHEMAS", os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "mcporter", "schemas"))
+
+
+def snapshot_path(server):
+    return os.path.join(SCHEMA_DIR, f"{server}.json")
+
+
+def load_snapshot(server):
+    """Esquema de las tools guardado EN EL REPO. Existe para que saber la forma
+    de una tool no dependa de tener sesion abierta ni red: `tools`, `describe` y
+    la validacion de argumentos funcionan igual en una maquina recien clonada.
+    Se genera con `mcp.sh snapshot <server>` desde una maquina autenticada."""
+    try:
+        with open(snapshot_path(server)) as f:
+            d = json.load(f)
+        return d if d.get("tools") else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def tools_json(server, allow_network=True):
     os.makedirs(CACHE_DIR, exist_ok=True)
     f = os.path.join(CACHE_DIR, f"{server}.json")
     if os.path.exists(f) and time.time() - os.path.getmtime(f) < CACHE_TTL:
         with open(f) as fh:
             return json.load(fh)
-    r = run(["list", server, "--json"])
-    try:
-        d = json.loads(r.stdout)
-    except json.JSONDecodeError:
-        die(f"{server}: mcporter did not return tools:\n{(r.stderr or r.stdout).strip()[-600:]}\n"
-            f"If it needs login, ask the USER to run `mcporter auth {server}` — never run it yourself, it opens their browser.")
-    if d.get("tools"):
-        with open(f, "w") as fh:
-            json.dump(d, fh)
-    return d
+    d = None
+    if allow_network and server in saved_logins():
+        r = run(["list", server, "--json"])
+        try:
+            d = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            d = None
+        if d and d.get("tools"):
+            with open(f, "w") as fh:
+                json.dump(d, fh)
+            return d
+    snap = load_snapshot(server)
+    if snap:
+        snap["_from_snapshot"] = os.path.basename(snapshot_path(server))
+        return snap
+    if d is not None:
+        die(f"{server}: mcporter returned no tools. If it needs login, ask the USER to run `mcporter auth {server}` "
+            f"— never run it yourself. There is also no schema snapshot: mcp.sh snapshot {server} (from a machine with a session).")
+    die(f"{server}: no session and no schema snapshot in the repo.\n"
+        f"To SEE what it offers without logging in, someone must commit one: mcp.sh snapshot {server}\n"
+        f"To USE it, ask the USER to run once:  mcporter auth {server}")
+
+
+def cmd_snapshot(a):
+    """Guarda el esquema de un servidor (o de todos los autenticados) en el repo."""
+    names = a[:1] or [s for s in servers() if s in saved_logins()]
+    if not names:
+        die("no hay servidores con sesion: no puedo capturar ningun esquema")
+    os.makedirs(SCHEMA_DIR, exist_ok=True)
+    for s in names:
+        if s not in servers():
+            die(f"no server named {s}. Catalog: {', '.join(servers())}")
+        need_login(s)
+        r = run(["list", s, "--json"])
+        try:
+            d = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            die(f"{s}: mcporter no devolvio tools:\n{(r.stderr or r.stdout).strip()[-300:]}")
+        tools = d.get("tools") or []
+        if not tools:
+            die(f"{s}: sin tools que guardar")
+        out = {"_doc": "Esquema capturado de las tools de este servidor MCP. Lo usa bin/_mcp.py cuando no hay sesion "
+                       "o no hay red, para que `tools`, `describe` y la validacion de argumentos funcionen igual. "
+                       "Regenerar desde una maquina autenticada: mcp.sh snapshot " + s,
+               "server": s,
+               "url": (servers()[s].get("baseUrl") or servers()[s].get("url") or ""),
+               "capturedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "mcporter": mcporter_version(),
+               "tools": [{"name": t["name"], "description": t.get("description", ""), "inputSchema": t.get("inputSchema", {})} for t in tools]}
+        with open(snapshot_path(s), "w") as f:
+            json.dump(out, f, indent=1, ensure_ascii=False)
+            f.write("\n")
+        print(f"  {s}: {len(tools)} tools -> mcporter/schemas/{s}.json  (commitealo para las demas maquinas)")
 
 
 def tool_names_quiet(server):
@@ -211,7 +275,6 @@ def cmd_tools(a):
     server, filt = a[0], (a[1].lower() if len(a) > 1 else "")
     if server not in servers():
         die(f"no server named {server}. Catalog: {', '.join(servers()) or '(empty)'}")
-    need_login(server)
     d = tools_json(server)
     tools = d.get("tools") or []
     if not tools:
@@ -239,6 +302,8 @@ def cmd_tools(a):
     if shown == 0:
         print(f"no tool in {server} matches '{filt}'")
     foot = f"  {shown} tool(s)" + (f", {hidden} hidden by policy" if hidden else "")
+    if d.get("_from_snapshot"):
+        foot += f" [schema snapshot {d.get('capturedAt', '?')}, no session needed to read it]"
     print(foot + f". Details: mcp.sh describe {server}.<tool>")
 
 
@@ -429,6 +494,10 @@ def validate_args(server, tool, rest):
         return [f"no tool named '{tool}' in {server}: mcp.sh tools {server} <word>"]
     props = (schema.get("inputSchema") or {}).get("properties") or {}
     out = []
+    given = {a.split("=", 1)[0].rstrip(":") for a in rest if "=" in a and not a.startswith("-")}
+    missing = [k for k in ((schema.get("inputSchema") or {}).get("required") or []) if k not in given]
+    if missing:
+        out.append(f"missing required parameter(s): {', '.join(missing)}")
     for arg in rest:
         if arg.startswith("-") or "=" not in arg:
             continue
@@ -481,6 +550,46 @@ def error_hints(server, tool, out):
     return hints
 
 
+def attempt_log_path(server, tool):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    return os.path.join(CACHE_DIR, f"attempts-{server}.{tool}.json")
+
+
+def remember_failure(server, tool, rest, message):
+    """Guarda (argumentos -> mensaje) de las llamadas que fallaron, para cortar
+    la tercera repeticion identica y para recordar al modelo lo que ya probo.
+    El bucle de tickets del 2026-09-24 fueron 12 llamadas con variaciones
+    cosmeticas del mismo error; el `loop-breaker` no lo vio porque el comando
+    cambiaba un poco cada vez."""
+    p = attempt_log_path(server, tool)
+    try:
+        with open(p) as f:
+            log = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        log = {}
+    key = " ".join(sorted(rest))
+    entry = log.get(key) or {"n": 0, "error": ""}
+    entry["n"] += 1
+    entry["error"] = message.strip().splitlines()[0][:200]
+    log[key] = entry
+    try:
+        with open(p, "w") as f:
+            json.dump(log, f)
+    except OSError:
+        pass
+    return entry["n"], log
+
+
+def previous_failures(server, tool, rest):
+    try:
+        with open(attempt_log_path(server, tool)) as f:
+            log = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None, []
+    key = " ".join(sorted(rest))
+    return log.get(key), [(k, v) for k, v in log.items() if k != key][-3:]
+
+
 def cmd_call(a):
     write = False
     if a and a[0] == "--write":
@@ -499,13 +608,28 @@ def cmd_call(a):
     if problems:
         die(f"{s}.{t}: not sent — the arguments do not match the tool's schema:\n  - " + "\n  - ".join(problems) +
             f"\nSee: mcp.sh describe {s}.{t}   (nested shape + example). This is an argument error, not a server bug.", 4)
+    same, others = previous_failures(s, t, rest)
+    if same and same["n"] >= 2:
+        die(f"BLOCKED: this exact call to {s}.{t} already failed {same['n']} times with:\n  {same['error']}\n"
+            f"Repeating it will not change anything. Either change the arguments (mcp.sh describe {s}.{t}) or stop and "
+            f"report that error to the user.", 6)
     r = run(["call", f"{s}.{t}", *rest, "--output", "text"])
     if r.returncode != 0:
         out = (r.stderr or "") + (r.stdout or "")
         msg = f"{s}.{t} failed (exit {r.returncode}):\n" + "\n".join(out.strip().splitlines()[-8:])
         for h in error_hints(s, t, out):
             msg += f"\n-> {h}"
+        n, _ = remember_failure(s, t, rest, out)
+        if others:
+            msg += "\n-> you already tried, in this session:\n" + "\n".join(f"     {k[:90]} -> {v['error'][:90]}" for k, v in others)
+        if n >= 2:
+            msg += f"\n-> attempt {n} of this exact call. STOP guessing: run `mcp.sh describe {s}.{t}` and use its shape and example, or report this error."
         die(msg, r.returncode)
+    # exito: se olvida el historial de fallos de esta tool
+    try:
+        os.remove(attempt_log_path(s, t))
+    except OSError:
+        pass
     if coerced:
         print(f"[mcp.sh] sent as JSON (schema says object/array/number): {', '.join(coerced)} — next time write k:=...", file=sys.stderr)
     sys.stdout.write(clip(r.stdout))
@@ -624,7 +748,7 @@ def main(argv):
         print(USAGE)
         return
     cmd, a = argv[0], argv[1:]
-    fn = {"list": cmd_list, "tools": cmd_tools, "describe": cmd_describe, "call": cmd_call, "status": cmd_status, "check": cmd_check, "doctor": cmd_doctor}.get(cmd)
+    fn = {"list": cmd_list, "tools": cmd_tools, "describe": cmd_describe, "call": cmd_call, "status": cmd_status, "check": cmd_check, "doctor": cmd_doctor, "snapshot": cmd_snapshot}.get(cmd)
     if not fn:
         die(USAGE)
     fn(a)

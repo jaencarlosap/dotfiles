@@ -186,6 +186,20 @@ instruction for this task. A topic fact is what you would otherwise look up
 again next month in another repo (a server's quirk, a CLI's real flag). Do not
 save what is visible in the code, and do not save "I did X".
 
+**When a task took you several attempts and finally worked, save the recipe:**
+
+```bash
+memory.sh recipe <name> < steps.md   # or a heredoc: the commands that worked, in order
+```
+
+A recipe is the sequence that worked, the parameters that were accepted, and
+the traps you hit (`mcp.sh describe X` first, this flag not that one, stop
+after two failures). Next time `memory.sh search` finds it and the task is one
+call instead of five. This is the only place that kind of knowledge goes: a
+recipe in memory costs **0 tokens** until someone searches for it, while a new
+skill would cost ~150 tokens on **every** turn forever. Never create a skill
+for a recipe.
+
 ## 3. If you were compacted
 
 Your context can be replaced by a summary without warning — it feels like

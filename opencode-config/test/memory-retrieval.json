@@ -1,0 +1,29 @@
+{
+  "_doc": "Test de recuperacion de la memoria: cada caso es una pregunta y un fragmento que DEBE aparecer en los resultados. Mezcla preguntas conceptuales (donde ayuda el vectorial) e identificadores exactos (donde ayuda el lexico). Se corre con test/memory-retrieval.py y sirve para decidir con datos si hace falta la tabla de sinonimos.",
+  "cases": [
+    {"q": "quien debe autenticar", "expect": "auth/login commands"},
+    {"q": "por que se abre el navegador solo", "expect": "open the user's browser"},
+    {"q": "credenciales guardadas", "expect": "sha256"},
+    {"q": "donde se guarda el token de mcporter", "expect": "credentials.json"},
+    {"q": "propiedades de una base de datos", "expect": "exact property names"},
+    {"q": "esquema de las tools sin sesion", "expect": "schemas/<server>.json"},
+    {"q": "el modelo dice hecho sin llamar a la tool", "expect": "CREATED/DONE"},
+    {"q": "cuanto cuesta el mcp de notion", "expect": "4370"},
+    {"q": "cuantas tools expone notion", "expect": "45 tools"},
+    {"q": "que pasa si cambio la url de un servidor mcp", "expect": "retires"},
+    {"q": "pagina nueva sin destino en notion", "expect": "creation_mode=draft"},
+    {"q": "por que fallan las peticiones al modelo local", "expect": "grammar"},
+    {"q": "velocidad de decodificacion del modelo", "expect": "tok/s"},
+    {"q": "ids de modelo del servidor", "expect": "no router for requested model"},
+    {"q": "presupuesto de razonamiento", "expect": "reasoning-budget"},
+    {"q": "permisos por agente en opencode", "expect": "last match wins"},
+    {"q": "skills que no son del repo", "expect": ".claude/skills"},
+    {"q": "trailers en los commits", "expect": "Co-Authored-By"},
+    {"q": "flag no-oauth", "expect": "--no-oauth"},
+    {"q": "createJiraIssue", "expect": "createJiraIssue"},
+    {"q": "mcporter auth por nombre o por url", "expect": "by URL"},
+    {"q": "como se crea una pagina en una base de datos de notion", "expect": "data_source_id"},
+    {"q": "donde viven los procedimientos que funcionaron", "expect": "recipe"},
+    {"q": "plugins de opencode y globales de bun", "expect": "Bun"}
+  ]
+}
